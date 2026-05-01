@@ -41,11 +41,19 @@
   .cal-day.other-month { background: var(--panel-2); color: var(--muted); }
   .cal-day.today .cal-day-num { background: var(--accent); color: #fff; border-radius: 50%; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; }
   .cal-day-num { display: inline-block; }
-  .cal-trip { display: block; margin-top: 2px; padding: 2px 6px; background: var(--accent); color: #fff; font-size: 11px; border-radius: 3px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cal-trip { display: block; margin-top: 2px; padding: 2px 6px; color: #fff; font-size: 11px; border-radius: 3px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-decoration: none; }
   .cal-trip:hover { filter: brightness(1.1); }
   .cal-trip.continued { border-top-left-radius: 0; border-bottom-left-radius: 0; }
   .cal-trip.continues { border-top-right-radius: 0; border-bottom-right-radius: 0; }
   .cal-trip.empty-label { visibility: hidden; }
+  .cal-trip.bg-indigo  { background: #6c8cff; }
+  .cal-trip.bg-teal    { background: #2dd4bf; }
+  .cal-trip.bg-amber   { background: #f59e0b; }
+  .cal-trip.bg-rose    { background: #fb7185; }
+  .cal-trip.bg-emerald { background: #34d399; }
+  .cal-trip.bg-violet  { background: #a78bfa; }
+  .cal-trip.bg-grey    { background: #b9bec7; }
+  .cal-trip.bg-accent  { background: var(--accent); }
 </style>
 </head>
 <body>
@@ -234,6 +242,11 @@ function setView(v) {
   if (v === "calendar") renderCalendar();
 }
 
+function readTripBlob(id) {
+  try { return JSON.parse(localStorage.getItem(TRIP_KEY_PREFIX + id) || "null"); }
+  catch (e) { return null; }
+}
+
 function renderCalendar() {
   const trips = readRegistry().filter(t => t.start && t.end);
   const container = document.getElementById("calendar-months");
@@ -247,7 +260,14 @@ function renderCalendar() {
     return;
   }
 
-  // Collect every (year, month) that any trip touches.
+  // Pre-load each trip's location-lane events so we can label calendar cells
+  // with the actual place names from the timeline view.
+  const tripLocations = {};
+  trips.forEach(t => {
+    const blob = readTripBlob(t.id);
+    tripLocations[t.id] = (blob?.events || []).filter(e => e.lane === "location");
+  });
+
   const monthSet = new Set();
   trips.forEach(t => {
     const s = parseISO(t.start);
@@ -265,10 +285,15 @@ function renderCalendar() {
     return new Date(y, m - 1, 1);
   });
 
-  months.forEach(monthDate => container.appendChild(renderMonth(monthDate, trips)));
+  months.forEach(monthDate => container.appendChild(renderMonth(monthDate, trips, tripLocations)));
 }
 
-function renderMonth(monthDate, trips) {
+const KNOWN_COLORS = new Set(["indigo","teal","amber","rose","emerald","violet","grey"]);
+function colorClass(c) {
+  return KNOWN_COLORS.has(c) ? `bg-${c}` : "bg-accent";
+}
+
+function renderMonth(monthDate, trips, tripLocations) {
   const year = monthDate.getFullYear();
   const month = monthDate.getMonth();
   const today = new Date();
@@ -309,18 +334,43 @@ function renderMonth(monthDate, trips) {
     const dow = day.getDay();
     trips.forEach(t => {
       if (dayISO < t.start || dayISO > t.end) return;
-      const isFirstDay = dayISO === t.start;
       const isWeekStart = dow === 0;
-      const showLabel = isFirstDay || isWeekStart;
-      const bar = document.createElement("a");
-      bar.className = "cal-trip";
-      bar.href = `index.html?trip=${encodeURIComponent(t.id)}`;
-      bar.textContent = showLabel ? (t.name || "Untitled") : "";
-      if (!showLabel) bar.classList.add("empty-label");
-      bar.title = `${t.name || "Untitled"} (${t.start} → ${t.end})`;
-      if (dayISO !== t.start && !isWeekStart) bar.classList.add("continued");
-      if (dayISO !== t.end && dow !== 6) bar.classList.add("continues");
-      cell.appendChild(bar);
+      const locs = (tripLocations[t.id] || []).filter(e => dayISO >= e.start && dayISO <= e.end);
+
+      // If the trip has any "Where" events covering this day, render those
+      // instead of the trip-name bar — that's the location-lane data the user
+      // wants to see on the calendar.
+      const items = locs.length > 0
+        ? locs.map(e => ({
+            label: e.title,
+            start: e.start,
+            end: e.end,
+            color: e.color || "violet",
+            href: `index.html?trip=${encodeURIComponent(t.id)}`,
+            tooltip: `${e.title} — ${t.name} (${e.start}${e.end !== e.start ? ` → ${e.end}` : ""})`,
+          }))
+        : [{
+            label: t.name || "Untitled",
+            start: t.start,
+            end: t.end,
+            color: "accent",
+            href: `index.html?trip=${encodeURIComponent(t.id)}`,
+            tooltip: `${t.name || "Untitled"} (${t.start} → ${t.end})`,
+          }];
+
+      items.forEach(item => {
+        const isFirstDay = dayISO === item.start;
+        const showLabel = isFirstDay || isWeekStart;
+        const bar = document.createElement("a");
+        bar.className = `cal-trip ${colorClass(item.color)}`;
+        bar.href = item.href;
+        bar.textContent = showLabel ? item.label : "";
+        if (!showLabel) bar.classList.add("empty-label");
+        bar.title = item.tooltip;
+        if (dayISO !== item.start && !isWeekStart) bar.classList.add("continued");
+        if (dayISO !== item.end && dow !== 6) bar.classList.add("continues");
+        cell.appendChild(bar);
+      });
     });
 
     grid.appendChild(cell);
