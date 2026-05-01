@@ -1032,7 +1032,8 @@ function parseReservation(text, defaultYear) {
 // City names are spelled out (not codes) and dates have no year.
 function parseDeltaItinerary(text, defaultYear) {
   const rawLines = text.split(/\r?\n/);
-  const dateRx = /^([A-Za-z]{3}),\s*(\d{1,2})([A-Z]{3})/;
+  // Date line variants: "Sat, 19DEC", "Sat 19 DEC", "Sat, 19 Dec 2026".
+  const dateRx = /^([A-Za-z]{3}),?\s+(\d{1,2})\s*([A-Z]{3})/i;
   const monthMap = { JAN:1, FEB:2, MAR:3, APR:4, MAY:5, JUN:6, JUL:7, AUG:8, SEP:9, OCT:10, NOV:11, DEC:12 };
   const blocks = [];
   let cur = null;
@@ -1048,12 +1049,11 @@ function parseDeltaItinerary(text, defaultYear) {
   if (cur) blocks.push(cur);
   if (blocks.length === 0) return null;
 
-  // Need to see "AIRLINE FLIGHTNUM" as the first non-blank body line of at
-  // least one block — otherwise this isn't a Delta-style paste.
-  const looksDelta = blocks.some(b => {
-    const firstReal = b.lines.map(l => l.trim()).find(Boolean);
-    return firstReal && /^[A-Z]{2,}\s+\d{1,4}\s*$/.test(firstReal);
-  });
+  // Need to see "AIRLINE FLIGHTNUM" (e.g. DELTA 358) somewhere in at least
+  // one block — otherwise this isn't a Delta-style paste.
+  const flightNumRx = /^\s*([A-Za-z]{2,}(?:\s+[A-Za-z]+)*)\s+(\d{1,4})\s*$/;
+  const looksDelta = blocks.some(b =>
+    b.lines.some(l => flightNumRx.test(l)));
   if (!looksDelta) return null;
 
   const events = [];
@@ -1081,8 +1081,9 @@ function parseDeltaItinerary(text, defaultYear) {
         continue;
       }
 
-      // Tab-separated cabin/time + city ("11:55AM\tTAMPA").
-      const parts = raw.split("\t").map(p => p.trim()).filter(Boolean);
+      // Tab- or wide-space-separated cabin/time + city ("11:55AM\tTAMPA"
+      // or "11:55AM   TAMPA"). Some systems strip tabs to spaces on paste.
+      const parts = raw.split(/\t+|\s{2,}/).map(p => p.trim()).filter(Boolean);
       const timeAt = (s) => s.match(/^(\d{1,2}:\d{2})\s*(AM|PM)\s*$/i);
       if (parts.length >= 2) {
         const left = parts[0], right = parts[parts.length - 1];

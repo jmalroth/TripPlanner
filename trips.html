@@ -296,16 +296,18 @@ function renderCalendar() {
   }
 
   // Pre-load each trip's location-lane events so we can label calendar cells
-  // with the actual place names from the timeline view. Also grab flight
-  // events as a fallback label when there's no location for a given day.
+  // with the actual place names from the timeline view. Also chain back-to-back
+  // flights into a single pill so a connection like YVR-FRA-ZNZ stays visually
+  // continuous across the calendar instead of stacking on the layover day.
   const tripLocations = {};
-  const tripFlights = {};
+  const tripFlightChains = {};
   trips.forEach(t => {
     const blob = readTripBlob(t.id);
     const events = blob?.events || [];
     tripLocations[t.id] = events.filter(e => e.lane === "location");
-    tripFlights[t.id] = events.filter(e =>
+    const flights = events.filter(e =>
       e.lane === "flights" && !(e.title || "").endsWith("layover"));
+    tripFlightChains[t.id] = chainFlights(flights);
   });
 
   const monthSet = new Set();
@@ -325,14 +327,52 @@ function renderCalendar() {
     return new Date(y, m - 1, 1);
   });
 
-  months.forEach(monthDate => container.appendChild(renderMonth(monthDate, trips, tripLocations, tripFlights)));
+  months.forEach(monthDate => container.appendChild(renderMonth(monthDate, trips, tripLocations, tripFlightChains)));
 }
 
 // Pull "YVR" / "ZNZ" airport codes out of a flight title like "LH493 YVR → FRA".
 function extractFlightCodes(title) {
   if (!title) return null;
-  const m = title.match(/\b([A-Z]{3})\s*(?:→|->|-)\s*([A-Z]{3})\b/);
+  const m = title.match(/\b([A-Z]{3})\s*(?:→|->|-|–)\s*([A-Z]{3})\b/);
   return m ? { from: m[1], to: m[2] } : null;
+}
+
+// Group flights into chains where each next flight starts on or before the
+// previous chain's last leg ends (a connection on the same day).
+function chainFlights(flights) {
+  if (!flights.length) return [];
+  const sorted = [...flights].sort((a, b) => {
+    if (a.start !== b.start) return a.start.localeCompare(b.start);
+    return (a.startTime || "00:00").localeCompare(b.startTime || "00:00");
+  });
+  const chains = [];
+  let cur = null;
+  for (const f of sorted) {
+    if (!cur) { cur = { flights: [f], start: f.start, end: f.end, color: f.color }; continue; }
+    if (f.start <= cur.end) {
+      cur.flights.push(f);
+      if (f.end > cur.end) cur.end = f.end;
+    } else {
+      chains.push(cur);
+      cur = { flights: [f], start: f.start, end: f.end, color: f.color };
+    }
+  }
+  if (cur) chains.push(cur);
+  for (const c of chains) {
+    const codes = c.flights.map(f => extractFlightCodes(f.title)).filter(Boolean);
+    if (codes.length) {
+      c.from = codes[0].from;
+      c.to = codes[codes.length - 1].to;
+      const stops = [codes[0].from];
+      codes.forEach(co => { if (stops[stops.length - 1] !== co.to) stops.push(co.to); });
+      c.label = stops.length === 2 ? `${stops[0]}–${stops[1]}` : `${c.from}–${c.to}`;
+      c.tooltip = stops.join(" → ");
+    } else {
+      c.label = c.flights[0].title || "Flight";
+      c.tooltip = c.flights.map(f => f.title).join(" · ");
+    }
+  }
+  return chains;
 }
 
 const KNOWN_COLORS = new Set(["indigo","teal","amber","rose","emerald","violet","grey"]);
@@ -340,7 +380,7 @@ function colorClass(c) {
   return KNOWN_COLORS.has(c) ? `bg-${c}` : "bg-accent";
 }
 
-function renderMonth(monthDate, trips, tripLocations, tripFlights) {
+function renderMonth(monthDate, trips, tripLocations, tripFlightChains) {
   const year = monthDate.getFullYear();
   const month = monthDate.getMonth();
   const today = new Date();
@@ -383,26 +423,23 @@ function renderMonth(monthDate, trips, tripLocations, tripFlights) {
       if (dayISO < t.start || dayISO > t.end) return;
       const isWeekStart = dow === 0;
       const locs = (tripLocations[t.id] || []).filter(e => dayISO >= e.start && dayISO <= e.end);
-      const flights = (tripFlights[t.id] || []).filter(e => dayISO >= e.start && dayISO <= e.end);
+      const chains = (tripFlightChains[t.id] || []).filter(c => dayISO >= c.start && dayISO <= c.end);
 
-      // Preferred labels in order: a flight that touches this day (transit
-      // days are dominated by the flight, e.g. "JRO-CPT" matters more than
-      // overlapping safari/city stays), then "Where" events, then a
-      // trip-name fallback so the trip is still visible on bare days.
+      // Preferred labels in order: a flight chain that touches this day
+      // (transit days are dominated by the flight, and chained connections
+      // render as one continuous pill rather than stacking on the layover
+      // day), then "Where" events, then a trip-name fallback so the trip
+      // is still visible on bare days.
       let items;
-      if (flights.length > 0) {
-        items = flights.map(e => {
-          const codes = extractFlightCodes(e.title);
-          const label = codes ? `${codes.from}–${codes.to}` : (e.title || "Flight");
-          return {
-            label,
-            start: e.start,
-            end: e.end,
-            color: e.color || "indigo",
-            href: `index.html?trip=${encodeURIComponent(t.id)}`,
-            tooltip: `${e.title} — ${t.name}`,
-          };
-        });
+      if (chains.length > 0) {
+        items = chains.map(c => ({
+          label: c.label,
+          start: c.start,
+          end: c.end,
+          color: c.color || "indigo",
+          href: `index.html?trip=${encodeURIComponent(t.id)}`,
+          tooltip: `${c.tooltip} — ${t.name}`,
+        }));
       } else if (locs.length > 0) {
         items = locs.map(e => ({
           label: e.title,
