@@ -13,8 +13,9 @@
   .trips-section h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 22px 0 8px; }
   .trip-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
   .trip-card { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
-  .trip-card a.trip-name { font-weight: 600; color: var(--text); text-decoration: none; }
-  .trip-card a.trip-name:hover { text-decoration: underline; }
+  .trip-card[data-href] { cursor: pointer; transition: border-color 0.1s, background 0.1s; }
+  .trip-card[data-href]:hover { border-color: var(--accent); background: var(--panel-2); }
+  .trip-card .trip-name { font-weight: 600; color: var(--text); }
   .trip-meta-line { color: var(--muted); font-size: 13px; }
   .trip-actions { display: flex; gap: 6px; }
   .trip-actions button { background: transparent; border: 1px solid var(--line); color: var(--muted); padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px; }
@@ -25,12 +26,38 @@
   .new-trip-form label { display: flex; flex-direction: column; font-size: 12px; color: var(--muted); gap: 4px; }
   .new-trip-form input { padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; font-size: 14px; }
   .new-trip-form button { padding: 7px 14px; background: var(--accent); color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
+
+  .view-toggle { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .view-toggle button { background: var(--panel); border: none; color: var(--muted); padding: 6px 12px; font-size: 13px; cursor: pointer; }
+  .view-toggle button + button { border-left: 1px solid var(--line); }
+  .view-toggle button.active { background: var(--accent); color: #fff; }
+
+  .calendar-wrap { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
+  .cal-nav { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  .cal-nav h3 { margin: 0; font-size: 16px; }
+  .cal-nav button { background: transparent; border: 1px solid var(--line); color: var(--text); padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+  .cal-nav button:hover { border-color: var(--accent); color: var(--accent); }
+  .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+  .cal-dow { background: var(--panel-2); color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; padding: 6px 8px; text-align: center; }
+  .cal-day { background: var(--panel); min-height: 64px; padding: 4px 6px; position: relative; font-size: 12px; }
+  .cal-day.other-month { background: var(--panel-2); color: var(--muted); }
+  .cal-day.today .cal-day-num { background: var(--accent); color: #fff; border-radius: 50%; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; }
+  .cal-day-num { display: inline-block; }
+  .cal-trip { display: block; margin-top: 2px; padding: 2px 6px; background: var(--accent); color: #fff; font-size: 11px; border-radius: 3px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cal-trip:hover { filter: brightness(1.1); }
+  .cal-trip.continued { border-top-left-radius: 0; border-bottom-left-radius: 0; }
+  .cal-trip.continues { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+  .cal-trip.empty-label { visibility: hidden; }
 </style>
 </head>
 <body>
   <div class="trips-wrap">
     <div class="trips-head">
       <h1>Trips</h1>
+      <div class="view-toggle" id="view-toggle">
+        <button data-view="list" class="active">List</button>
+        <button data-view="calendar">Calendar</button>
+      </div>
     </div>
 
     <form id="new-trip-form" class="new-trip-form">
@@ -40,27 +67,29 @@
       <button type="submit">+ New trip</button>
     </form>
 
-    <section class="trips-section">
-      <h2>Upcoming &amp; current</h2>
-      <ul id="upcoming-list" class="trip-list"></ul>
-    </section>
+    <div id="list-view">
+      <section class="trips-section">
+        <h2>Upcoming &amp; current</h2>
+        <ul id="upcoming-list" class="trip-list"></ul>
+      </section>
 
-    <section class="trips-section">
-      <h2>Past</h2>
-      <ul id="past-list" class="trip-list"></ul>
-    </section>
+      <section class="trips-section">
+        <h2>Past</h2>
+        <ul id="past-list" class="trip-list"></ul>
+      </section>
 
-    <section class="trips-section">
-      <h2>Archived snapshots</h2>
-      <ul class="trip-list">
-        <li class="trip-card">
-          <div>
-            <a class="trip-name" href="africa.html">Africa 2026</a>
-            <div class="trip-meta-line">Standalone HTML snapshot</div>
-          </div>
-        </li>
-      </ul>
-    </section>
+    </div>
+
+    <div id="calendar-view" hidden>
+      <div class="calendar-wrap">
+        <div class="cal-nav">
+          <button id="cal-prev" type="button">‹ Prev</button>
+          <h3 id="cal-title"></h3>
+          <button id="cal-next" type="button">Next ›</button>
+        </div>
+        <div id="cal-grid" class="cal-grid"></div>
+      </div>
+    </div>
   </div>
 
 <script>
@@ -127,9 +156,10 @@ function render() {
   function row(t) {
     const li = document.createElement("li");
     li.className = "trip-card";
+    li.dataset.href = `index.html?trip=${encodeURIComponent(t.id)}`;
     li.innerHTML = `
       <div>
-        <a class="trip-name" href="index.html?trip=${encodeURIComponent(t.id)}"></a>
+        <span class="trip-name"></span>
         <div class="trip-meta-line"></div>
       </div>
       <div class="trip-actions">
@@ -139,6 +169,10 @@ function render() {
     `;
     li.querySelector(".trip-name").textContent = t.name || "Untitled trip";
     li.querySelector(".trip-meta-line").textContent = fmtRange(t);
+    li.addEventListener("click", (e) => {
+      if (e.target.closest("button")) return;
+      window.location.href = li.dataset.href;
+    });
     li.querySelector('[data-action="rename"]').addEventListener("click", () => {
       const next = prompt("Rename trip:", t.name || "");
       if (next == null) return;
@@ -175,6 +209,126 @@ function render() {
   else past.forEach(t => ul2.appendChild(row(t)));
 }
 
+// --- calendar view ---
+
+const VIEW_KEY = "trip-builder-trips-view";
+const CAL_MONTH_KEY = "trip-builder-trips-cal-month";
+
+let currentView = localStorage.getItem(VIEW_KEY) || "list";
+
+function parseISO(s) {
+  if (!s) return null;
+  const [y, m, d] = s.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+function fmtISO(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+function addDays(d, n) {
+  const r = new Date(d);
+  r.setDate(r.getDate() + n);
+  return r;
+}
+function sameDay(a, b) {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+let calCursor = (() => {
+  const saved = localStorage.getItem(CAL_MONTH_KEY);
+  if (saved) {
+    const [y, m] = saved.split("-").map(Number);
+    return new Date(y, m - 1, 1);
+  }
+  const t = new Date();
+  return new Date(t.getFullYear(), t.getMonth(), 1);
+})();
+
+function setView(v) {
+  currentView = v;
+  localStorage.setItem(VIEW_KEY, v);
+  document.querySelectorAll("#view-toggle button").forEach(b => {
+    b.classList.toggle("active", b.dataset.view === v);
+  });
+  document.getElementById("list-view").hidden = v !== "list";
+  document.getElementById("calendar-view").hidden = v !== "calendar";
+  if (v === "calendar") renderCalendar();
+}
+
+function renderCalendar() {
+  const trips = readRegistry().filter(t => t.start && t.end);
+
+  const year = calCursor.getFullYear();
+  const month = calCursor.getMonth();
+  const monthName = calCursor.toLocaleString(undefined, { month: "long", year: "numeric" });
+  document.getElementById("cal-title").textContent = monthName;
+  localStorage.setItem(CAL_MONTH_KEY, `${year}-${String(month + 1).padStart(2,"0")}`);
+
+  const firstOfMonth = new Date(year, month, 1);
+  // Start grid on Sunday of the week containing the 1st.
+  const gridStart = addDays(firstOfMonth, -firstOfMonth.getDay());
+  const today = new Date();
+
+  const grid = document.getElementById("cal-grid");
+  grid.innerHTML = "";
+
+  ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].forEach(d => {
+    const h = document.createElement("div");
+    h.className = "cal-dow";
+    h.textContent = d;
+    grid.appendChild(h);
+  });
+
+  // 6 rows × 7 days = 42 cells (covers any month).
+  for (let i = 0; i < 42; i++) {
+    const day = addDays(gridStart, i);
+    const cell = document.createElement("div");
+    cell.className = "cal-day";
+    if (day.getMonth() !== month) cell.classList.add("other-month");
+    if (sameDay(day, today)) cell.classList.add("today");
+
+    const num = document.createElement("span");
+    num.className = "cal-day-num";
+    num.textContent = day.getDate();
+    cell.appendChild(num);
+
+    const dayISO = fmtISO(day);
+    const dow = day.getDay();
+    trips.forEach(t => {
+      if (dayISO < t.start || dayISO > t.end) return;
+      const isFirstDay = dayISO === t.start;
+      const isWeekStart = dow === 0;
+      // Only label the bar on the trip's first day or the first day of a week
+      // (so it visually continues across the row without repeating the name).
+      const showLabel = isFirstDay || isWeekStart;
+      const bar = document.createElement("a");
+      bar.className = "cal-trip";
+      bar.href = `index.html?trip=${encodeURIComponent(t.id)}`;
+      bar.textContent = showLabel ? (t.name || "Untitled") : "";
+      if (!showLabel) bar.classList.add("empty-label");
+      bar.title = `${t.name || "Untitled"} (${t.start} → ${t.end})`;
+      if (dayISO !== t.start && !isWeekStart) bar.classList.add("continued");
+      if (dayISO !== t.end && dow !== 6) bar.classList.add("continues");
+      cell.appendChild(bar);
+    });
+
+    grid.appendChild(cell);
+  }
+}
+
+document.getElementById("view-toggle").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-view]");
+  if (!btn) return;
+  setView(btn.dataset.view);
+});
+document.getElementById("cal-prev").addEventListener("click", () => {
+  calCursor = new Date(calCursor.getFullYear(), calCursor.getMonth() - 1, 1);
+  renderCalendar();
+});
+document.getElementById("cal-next").addEventListener("click", () => {
+  calCursor = new Date(calCursor.getFullYear(), calCursor.getMonth() + 1, 1);
+  renderCalendar();
+});
+
 document.getElementById("new-trip-form").addEventListener("submit", (e) => {
   e.preventDefault();
   const name = document.getElementById("nt-name").value.trim();
@@ -198,6 +352,7 @@ document.getElementById("new-trip-form").addEventListener("submit", (e) => {
 });
 
 render();
+setView(currentView);
 </script>
 </body>
 </html>
