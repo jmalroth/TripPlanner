@@ -296,11 +296,16 @@ function renderCalendar() {
   }
 
   // Pre-load each trip's location-lane events so we can label calendar cells
-  // with the actual place names from the timeline view.
+  // with the actual place names from the timeline view. Also grab flight
+  // events as a fallback label when there's no location for a given day.
   const tripLocations = {};
+  const tripFlights = {};
   trips.forEach(t => {
     const blob = readTripBlob(t.id);
-    tripLocations[t.id] = (blob?.events || []).filter(e => e.lane === "location");
+    const events = blob?.events || [];
+    tripLocations[t.id] = events.filter(e => e.lane === "location");
+    tripFlights[t.id] = events.filter(e =>
+      e.lane === "flights" && !(e.title || "").endsWith("layover"));
   });
 
   const monthSet = new Set();
@@ -320,7 +325,14 @@ function renderCalendar() {
     return new Date(y, m - 1, 1);
   });
 
-  months.forEach(monthDate => container.appendChild(renderMonth(monthDate, trips, tripLocations)));
+  months.forEach(monthDate => container.appendChild(renderMonth(monthDate, trips, tripLocations, tripFlights)));
+}
+
+// Pull "YVR" / "ZNZ" airport codes out of a flight title like "LH493 YVR → FRA".
+function extractFlightCodes(title) {
+  if (!title) return null;
+  const m = title.match(/\b([A-Z]{3})\s*(?:→|->|-)\s*([A-Z]{3})\b/);
+  return m ? { from: m[1], to: m[2] } : null;
 }
 
 const KNOWN_COLORS = new Set(["indigo","teal","amber","rose","emerald","violet","grey"]);
@@ -328,7 +340,7 @@ function colorClass(c) {
   return KNOWN_COLORS.has(c) ? `bg-${c}` : "bg-accent";
 }
 
-function renderMonth(monthDate, trips, tripLocations) {
+function renderMonth(monthDate, trips, tripLocations, tripFlights) {
   const year = monthDate.getFullYear();
   const month = monthDate.getMonth();
   const today = new Date();
@@ -371,27 +383,44 @@ function renderMonth(monthDate, trips, tripLocations) {
       if (dayISO < t.start || dayISO > t.end) return;
       const isWeekStart = dow === 0;
       const locs = (tripLocations[t.id] || []).filter(e => dayISO >= e.start && dayISO <= e.end);
+      const flights = (tripFlights[t.id] || []).filter(e => dayISO >= e.start && dayISO <= e.end);
 
-      // If the trip has any "Where" events covering this day, render those
-      // instead of the trip-name bar — that's the location-lane data the user
-      // wants to see on the calendar.
-      const items = locs.length > 0
-        ? locs.map(e => ({
-            label: e.title,
+      // Preferred labels in order: "Where" events for this day, then any
+      // flights that touch this day rendered as "YVR-ZNZ" codes, then a
+      // trip-name fallback so the trip is still visible on bare days.
+      let items;
+      if (locs.length > 0) {
+        items = locs.map(e => ({
+          label: e.title,
+          start: e.start,
+          end: e.end,
+          color: e.color || "violet",
+          href: `index.html?trip=${encodeURIComponent(t.id)}`,
+          tooltip: `${e.title} — ${t.name} (${e.start}${e.end !== e.start ? ` → ${e.end}` : ""})`,
+        }));
+      } else if (flights.length > 0) {
+        items = flights.map(e => {
+          const codes = extractFlightCodes(e.title);
+          const label = codes ? `${codes.from}–${codes.to}` : (e.title || "Flight");
+          return {
+            label,
             start: e.start,
             end: e.end,
-            color: e.color || "violet",
+            color: e.color || "indigo",
             href: `index.html?trip=${encodeURIComponent(t.id)}`,
-            tooltip: `${e.title} — ${t.name} (${e.start}${e.end !== e.start ? ` → ${e.end}` : ""})`,
-          }))
-        : [{
-            label: t.name || "Untitled",
-            start: t.start,
-            end: t.end,
-            color: "accent",
-            href: `index.html?trip=${encodeURIComponent(t.id)}`,
-            tooltip: `${t.name || "Untitled"} (${t.start} → ${t.end})`,
-          }];
+            tooltip: `${e.title} — ${t.name}`,
+          };
+        });
+      } else {
+        items = [{
+          label: t.name || "Untitled",
+          start: t.start,
+          end: t.end,
+          color: "accent",
+          href: `index.html?trip=${encodeURIComponent(t.id)}`,
+          tooltip: `${t.name || "Untitled"} (${t.start} → ${t.end})`,
+        }];
+      }
 
       items.forEach(item => {
         const bar = document.createElement("a");
