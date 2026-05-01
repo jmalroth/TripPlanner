@@ -790,11 +790,30 @@ main {
 .pricing-pill.selected { outline: 2px solid var(--accent); outline-offset: 1px; }
 .pricing-pill.in-line-item { opacity: 0.45; cursor: not-allowed; text-decoration: line-through; }
 .pricing-pill .pill-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-.pricing-add-row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
-.pricing-add-row input[type="number"] { width: 110px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; font-size: 14px; }
-.pricing-add-row input[type="text"] { flex: 1; min-width: 180px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; font-size: 14px; }
-.pricing-add-row button { padding: 7px 14px; border-radius: 4px; font-size: 14px; cursor: pointer; border: 1px solid var(--accent); background: var(--accent); color: #fff; }
-.pricing-add-row button.ghost { background: transparent; color: var(--muted); border-color: var(--line); }
+.pricing-add-form { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.pricing-add-form > input[type="text"] { padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; font-size: 14px; }
+.pricing-hint { font-size: 12px; color: var(--muted); }
+.pricing-hint code { background: var(--panel); padding: 1px 4px; border-radius: 3px; }
+#pricing-parties { display: flex; flex-direction: column; gap: 6px; }
+.pricing-party-row { display: flex; gap: 8px; align-items: center; padding: 6px 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+.pricing-party-row .party-name { width: 110px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 4px; font-size: 13px; }
+.pricing-party-row .party-amount { flex: 1; padding: 4px 6px; border: 1px solid var(--line); border-radius: 4px; font-size: 13px; }
+.pricing-party-row .party-computed { min-width: 80px; text-align: right; font-weight: 600; font-size: 13px; }
+.pricing-party-row .party-computed.invalid { color: #b91c1c; font-weight: normal; font-size: 12px; }
+.pricing-party-row .party-remove { background: transparent; border: 1px solid var(--line); color: var(--muted); padding: 2px 8px; border-radius: 4px; cursor: pointer; font-size: 14px; line-height: 1; }
+.pricing-party-row .party-remove:hover { color: #b12a48; border-color: #b12a48; }
+.pricing-party { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 8px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+.pricing-party .party-label { font-weight: 600; min-width: 50px; font-size: 13px; }
+.pricing-party label { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
+.pricing-party input[type="number"] { width: 70px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 4px; font-size: 13px; }
+.pricing-party .pp-adult-qty, .pricing-party .pp-kid-qty { width: 48px; }
+.pricing-party .party-subtotal { margin-left: auto; font-weight: 600; font-size: 13px; color: var(--text); }
+.pricing-add-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.pricing-line-total { margin-left: auto; font-weight: 600; font-size: 14px; }
+.pricing-add-actions button { padding: 7px 14px; border-radius: 4px; font-size: 14px; cursor: pointer; border: 1px solid var(--accent); background: var(--accent); color: #fff; }
+.pricing-add-actions button.ghost { background: transparent; color: var(--muted); border-color: var(--line); }
+
+.pricing-line-items .li-breakdown { font-size: 12px; color: var(--muted); margin-top: 2px; }
 
 .pricing-summary { display: flex; gap: 24px; padding: 12px 16px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 14px; flex-wrap: wrap; }
 .pricing-summary-tile { display: flex; flex-direction: column; gap: 2px; }

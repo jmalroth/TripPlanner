@@ -644,6 +644,7 @@ function renderPricing() {
   renderPricingPills();
   renderPricingLineItems();
   renderPricingSummary();
+  renderPricingPartiesForm();
 }
 
 function renderPricingPills() {
@@ -708,7 +709,7 @@ function renderPricingLineItems() {
     if (!items || items.length === 0) continue;
     const group = document.createElement("div");
     group.className = "pricing-group";
-    const subtotal = items.reduce((s, li) => s + (Number(li.cost) || 0), 0);
+    const subtotal = items.reduce((s, li) => s + lineItemTotal(li), 0);
     const h = document.createElement("h3");
     h.innerHTML = `<span></span><span class="group-total"></span>`;
     h.querySelector("span").textContent = LANE_LABEL[lane] || lane;
@@ -728,9 +729,18 @@ function renderPricingLineItems() {
       if (li.label) evList.textContent = eventTitles.join(" · ");
       main.appendChild(label);
       if (li.label) main.appendChild(evList);
+      // If multiple parties, show breakdown above the total.
+      if (li.pricing && Array.isArray(li.pricing.parties) && li.pricing.parties.length > 1) {
+        const breakdown = document.createElement("div");
+        breakdown.className = "li-breakdown";
+        breakdown.textContent = li.pricing.parties
+          .map(p => `${p.name}: ${fmtMoney(partyAmount(p))}`)
+          .join(" · ");
+        main.appendChild(breakdown);
+      }
       const cost = document.createElement("div");
       cost.className = "li-cost";
-      cost.textContent = fmtMoney(li.cost);
+      cost.textContent = fmtMoney(lineItemTotal(li));
       const actions = document.createElement("div");
       actions.className = "li-actions";
       const editBtn = document.createElement("button");
@@ -764,13 +774,14 @@ function renderPricingSummary() {
   const container = document.getElementById("pricing-summary");
   if (!container) return;
   ensureLineItems();
-  let booked = 0, tentativeTotal = 0;
+  let booked = 0, tentativeTotal = 0, mineTotal = 0, othersTotal = 0;
   for (const li of state.lineItems) {
-    const cost = Number(li.cost) || 0;
-    // Treat a line item as tentative if ANY of its events are tentative.
+    const total = lineItemTotal(li);
     const isTent = li.eventIds.some(id => state.events.find(e => e.id === id)?.tentative);
-    if (isTent) tentativeTotal += cost;
-    else booked += cost;
+    if (isTent) tentativeTotal += total;
+    else booked += total;
+    mineTotal += lineItemMineTotal(li);
+    othersTotal += lineItemOthersTotal(li);
   }
   container.innerHTML = "";
   function tile(label, value, cls = "") {
@@ -781,9 +792,11 @@ function renderPricingSummary() {
     t.querySelector(".value").textContent = value;
     return t;
   }
+  container.appendChild(tile("Mine", fmtMoney(mineTotal), "total"));
+  if (othersTotal > 0) container.appendChild(tile("Others", fmtMoney(othersTotal)));
   container.appendChild(tile("Booked", fmtMoney(booked)));
   container.appendChild(tile("Tentative", fmtMoney(tentativeTotal)));
-  container.appendChild(tile("Grand total", fmtMoney(booked + tentativeTotal), "total"));
+  container.appendChild(tile("Grand total", fmtMoney(booked + tentativeTotal)));
 }
 
 function editLineItem(id) {
@@ -800,25 +813,138 @@ function editLineItem(id) {
   renderPricing();
 }
 
+// Parse a math-y amount string. Accepts:
+//   "250"          → 250
+//   "1/4*1000"     → 250
+//   "25%*800"      → 200
+//   "2*150"        → 300
+//   ""             → 0
+// Returns NaN for unsafe/invalid input.
+function parseAmount(str) {
+  if (str == null || str === "") return 0;
+  const s = String(str).trim();
+  if (!s) return 0;
+  // Whitelist characters to avoid arbitrary code execution via Function.
+  if (!/^[\d.+\-*/() %]+$/.test(s)) return NaN;
+  // Replace % with /100 (after a number, this means percent).
+  const normalized = s.replace(/%/g, "/100");
+  try {
+    const v = Function(`"use strict"; return (${normalized});`)();
+    return typeof v === "number" && isFinite(v) ? v : NaN;
+  } catch (e) { return NaN; }
+}
+
+const DEFAULT_PARTIES = [{ name: "Mine", input: "" }];
+const formParties = []; // working state for the add form
+
+function partyAmount(p) {
+  return parseAmount(p.input) || 0;
+}
+function lineItemTotal(li) {
+  if (li.pricing && Array.isArray(li.pricing.parties)) {
+    return li.pricing.parties.reduce((s, p) => s + partyAmount(p), 0);
+  }
+  return Number(li.cost) || 0;
+}
+function lineItemMineTotal(li) {
+  if (li.pricing && Array.isArray(li.pricing.parties) && li.pricing.parties.length > 0) {
+    return partyAmount(li.pricing.parties[0]);
+  }
+  return Number(li.cost) || 0;
+}
+function lineItemOthersTotal(li) {
+  if (li.pricing && Array.isArray(li.pricing.parties)) {
+    return li.pricing.parties.slice(1).reduce((s, p) => s + partyAmount(p), 0);
+  }
+  return 0;
+}
+
+function renderPricingPartiesForm() {
+  const container = document.getElementById("pricing-parties");
+  if (!container) return;
+  container.innerHTML = "";
+  if (formParties.length === 0) formParties.push({ name: "Mine", input: "" });
+  formParties.forEach((p, idx) => {
+    const row = document.createElement("div");
+    row.className = "pricing-party-row";
+    const nameInput = document.createElement("input");
+    nameInput.type = "text";
+    nameInput.className = "party-name";
+    nameInput.value = p.name;
+    nameInput.placeholder = idx === 0 ? "Mine" : `Group ${idx + 1}`;
+    nameInput.addEventListener("input", (e) => { p.name = e.target.value; });
+    const amountInput = document.createElement("input");
+    amountInput.type = "text";
+    amountInput.className = "party-amount";
+    amountInput.value = p.input;
+    amountInput.placeholder = "$ amount or math (e.g. 1/4*1000)";
+    const computed = document.createElement("span");
+    computed.className = "party-computed";
+    function refresh() {
+      const v = parseAmount(amountInput.value);
+      if (isNaN(v)) {
+        computed.textContent = "invalid";
+        computed.classList.add("invalid");
+      } else {
+        computed.textContent = fmtMoney(v);
+        computed.classList.remove("invalid");
+      }
+      updatePricingFormTotals();
+    }
+    amountInput.addEventListener("input", (e) => { p.input = e.target.value; refresh(); });
+    refresh();
+    row.appendChild(nameInput);
+    row.appendChild(amountInput);
+    row.appendChild(computed);
+    if (formParties.length > 1) {
+      const x = document.createElement("button");
+      x.type = "button";
+      x.className = "party-remove";
+      x.textContent = "×";
+      x.title = "Remove this group";
+      x.addEventListener("click", () => {
+        formParties.splice(idx, 1);
+        renderPricingPartiesForm();
+      });
+      row.appendChild(x);
+    }
+    container.appendChild(row);
+  });
+  // Hide "+ Add group" when at the cap.
+  const addBtn = document.getElementById("pricing-add-party");
+  if (addBtn) addBtn.style.display = formParties.length >= 4 ? "none" : "";
+  updatePricingFormTotals();
+}
+
+function updatePricingFormTotals() {
+  const totalEl = document.getElementById("pricing-line-total");
+  if (!totalEl) return;
+  const total = formParties.reduce((s, p) => s + (parseAmount(p.input) || 0), 0);
+  totalEl.textContent = `Total: ${fmtMoney(total)}`;
+}
+
 function addPricingLineItem() {
   if (pricingSelection.size === 0) {
     alert("Select at least one item to bundle.");
     return;
   }
-  const costInput = document.getElementById("pricing-cost");
   const labelInput = document.getElementById("pricing-label");
-  const cost = Number(costInput.value);
-  if (isNaN(cost) || cost < 0) { alert("Enter a valid cost."); return; }
+  const parties = formParties
+    .map(p => ({ name: (p.name || "").trim() || "Unnamed", input: p.input }))
+    .filter(p => parseAmount(p.input) > 0);
+  if (parties.length === 0) { alert("Enter at least one amount."); return; }
   ensureLineItems();
   state.lineItems.push({
     id: "li" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
     eventIds: [...pricingSelection],
-    cost,
     label: labelInput.value.trim() || null,
+    pricing: { parties },
   });
   pricingSelection.clear();
-  costInput.value = "";
   labelInput.value = "";
+  formParties.length = 0;
+  formParties.push({ name: "Mine", input: "" });
+  renderPricingPartiesForm();
   save();
   renderPricing();
 }
@@ -2369,6 +2495,11 @@ document.getElementById("pricing-add-btn")?.addEventListener("click", addPricing
 document.getElementById("pricing-clear-sel")?.addEventListener("click", () => {
   pricingSelection.clear();
   renderPricingPills();
+});
+document.getElementById("pricing-add-party")?.addEventListener("click", () => {
+  if (formParties.length >= 4) return;
+  formParties.push({ name: `Group ${formParties.length + 1}`, input: "" });
+  renderPricingPartiesForm();
 });
 
 document.getElementById("add-option-btn").addEventListener("click", () => {

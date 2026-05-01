@@ -105,11 +105,19 @@
             <span id="pricing-selection-summary" class="pricing-selection-summary"></span>
           </div>
           <div id="pricing-pills" class="pricing-pills"></div>
-          <div class="pricing-add-row">
-            <input id="pricing-cost" type="number" min="0" step="0.01" placeholder="$0.00" />
+          <div class="pricing-add-form">
             <input id="pricing-label" type="text" placeholder="Optional label (e.g. 'Round trip flights')" />
-            <button id="pricing-add-btn" type="button">+ Add line item</button>
-            <button id="pricing-clear-sel" type="button" class="ghost">Clear selection</button>
+            <div class="pricing-hint">
+              Tip: amount fields accept math —
+              <code>1/4*1000</code>, <code>25%*800</code>, <code>2*150</code>, or just <code>250</code>.
+            </div>
+            <div id="pricing-parties"></div>
+            <div class="pricing-add-actions">
+              <button id="pricing-add-party" type="button" class="ghost">+ Add group</button>
+              <span id="pricing-line-total" class="pricing-line-total">Total: $0.00</span>
+              <button id="pricing-add-btn" type="button">+ Add line item</button>
+              <button id="pricing-clear-sel" type="button" class="ghost">Clear selection</button>
+            </div>
           </div>
         </div>
         <div id="pricing-summary" class="pricing-summary"></div>
