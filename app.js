@@ -493,6 +493,9 @@ function renderTimeline(container, rangeStart, rangeEnd, opts) {
     const rowCount = Math.max(...packed.map(p => p.row + 1));
     laneArea.style.setProperty("--rows", rowCount);
 
+    // Night shading (8pm–8am) per day — sits behind the event bars.
+    appendNightShades(laneArea, totalDays, dayWidths, dayOffsetsPx, shrunkSet, dayUtcBounds);
+
     for (const { ev, sUtc, eUtc, row } of packed) {
       let leftFrac = utcToFrac(sUtc, dayUtcBounds);
       let rightFrac = utcToFrac(eUtc, dayUtcBounds);
@@ -522,6 +525,38 @@ function renderTimeline(container, rangeStart, rangeEnd, opts) {
 
   container.innerHTML = "";
   container.appendChild(grid);
+}
+
+// Render translucent grey strips for the night portion of each day
+// (00:00–08:00 and 20:00–24:00) behind the event bars in a lane area.
+function appendNightShades(laneArea, totalDays, dayWidths, dayOffsetsPx, shrunkSet, dayUtcBounds) {
+  const layer = el("div", "night-shades");
+  for (let i = 0; i < totalDays; i++) {
+    if (shrunkSet && shrunkSet.has(dayUtcBounds[i].ds)) continue;
+    const dayLeftFrac = i;
+    const morningEndFrac = i + 8 / 24;
+    const eveningStartFrac = i + 20 / 24;
+    const dayRightFrac = i + 1;
+
+    function place(el2, leftFrac, rightFrac) {
+      if (dayWidths) {
+        const leftPx = fracToPx(leftFrac, dayWidths, dayOffsetsPx);
+        const rightPx = fracToPx(rightFrac, dayWidths, dayOffsetsPx);
+        el2.style.left = `${leftPx}px`;
+        el2.style.width = `${Math.max(0, rightPx - leftPx)}px`;
+      } else {
+        el2.style.left = `${(leftFrac / totalDays) * 100}%`;
+        el2.style.width = `${((rightFrac - leftFrac) / totalDays) * 100}%`;
+      }
+    }
+    const morning = el("div", "night-shade");
+    place(morning, dayLeftFrac, morningEndFrac);
+    const evening = el("div", "night-shade");
+    place(evening, eveningStartFrac, dayRightFrac);
+    layer.appendChild(morning);
+    layer.appendChild(evening);
+  }
+  laneArea.appendChild(layer);
 }
 
 // --- breakdown segment sizing ---

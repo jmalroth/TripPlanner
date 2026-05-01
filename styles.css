@@ -572,6 +572,20 @@ main {
   background: #fff;
 }
 
+.night-shades {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+.night-shade {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(50, 60, 80, 0.07);
+}
+.lane-events .event { z-index: 1; }
+
 .lane-events.empty {
   height: calc(var(--row-h) + 8px);
   background: repeating-linear-gradient(
