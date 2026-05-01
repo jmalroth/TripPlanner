@@ -56,6 +56,7 @@
   .cal-trip.bg-violet  { background: #a78bfa; }
   .cal-trip.bg-grey    { background: #b9bec7; }
   .cal-trip.bg-accent  { background: var(--accent); }
+  .cal-trip.cal-spacer { background: transparent; pointer-events: none; }
 </style>
 </head>
 <body>
@@ -296,18 +297,19 @@ function renderCalendar() {
   }
 
   // Pre-load each trip's location-lane events so we can label calendar cells
-  // with the actual place names from the timeline view. Also chain back-to-back
-  // flights into a single pill so a connection like YVR-FRA-ZNZ stays visually
-  // continuous across the calendar instead of stacking on the layover day.
+  // with the actual place names from the timeline view. Pack flights into
+  // stable rows so a multi-leg trip keeps each leg on its own row across all
+  // days (e.g. FRA-ZNZ stays on row 1 on days 18 and 19 instead of jumping
+  // up to row 0 once YVR-FRA ends).
   const tripLocations = {};
-  const tripFlightChains = {};
+  const tripFlights = {};
   trips.forEach(t => {
     const blob = readTripBlob(t.id);
     const events = blob?.events || [];
     tripLocations[t.id] = events.filter(e => e.lane === "location");
     const flights = events.filter(e =>
       e.lane === "flights" && !(e.title || "").endsWith("layover"));
-    tripFlightChains[t.id] = chainFlights(flights);
+    tripFlights[t.id] = packFlightsIntoRows(flights);
   });
 
   const monthSet = new Set();
@@ -327,7 +329,23 @@ function renderCalendar() {
     return new Date(y, m - 1, 1);
   });
 
-  months.forEach(monthDate => container.appendChild(renderMonth(monthDate, trips, tripLocations, tripFlightChains)));
+  months.forEach(monthDate => container.appendChild(renderMonth(monthDate, trips, tripLocations, tripFlights)));
+}
+
+// Assign each flight a stable row index so a flight stays on the same row
+// across every day it touches (and other rows are blank-padded as needed).
+function packFlightsIntoRows(flights) {
+  const sorted = [...flights].sort((a, b) => {
+    if (a.start !== b.start) return a.start.localeCompare(b.start);
+    return (a.startTime || "00:00").localeCompare(b.startTime || "00:00");
+  });
+  const rowEnds = []; // last end-date per row
+  return sorted.map(f => {
+    let row = 0;
+    while (row < rowEnds.length && rowEnds[row] >= f.start) row++;
+    rowEnds[row] = f.end;
+    return { ...f, _row: row };
+  });
 }
 
 // Pull "YVR" / "ZNZ" airport codes out of a flight title like "LH493 YVR → FRA".
@@ -380,7 +398,7 @@ function colorClass(c) {
   return KNOWN_COLORS.has(c) ? `bg-${c}` : "bg-accent";
 }
 
-function renderMonth(monthDate, trips, tripLocations, tripFlightChains) {
+function renderMonth(monthDate, trips, tripLocations, tripFlights) {
   const year = monthDate.getFullYear();
   const month = monthDate.getMonth();
   const today = new Date();
@@ -423,23 +441,34 @@ function renderMonth(monthDate, trips, tripLocations, tripFlightChains) {
       if (dayISO < t.start || dayISO > t.end) return;
       const isWeekStart = dow === 0;
       const locs = (tripLocations[t.id] || []).filter(e => dayISO >= e.start && dayISO <= e.end);
-      const chains = (tripFlightChains[t.id] || []).filter(c => dayISO >= c.start && dayISO <= c.end);
+      const flightsToday = (tripFlights[t.id] || []).filter(e => dayISO >= e.start && dayISO <= e.end);
 
-      // Preferred labels in order: a flight chain that touches this day
-      // (transit days are dominated by the flight, and chained connections
-      // render as one continuous pill rather than stacking on the layover
-      // day), then "Where" events, then a trip-name fallback so the trip
-      // is still visible on bare days.
+      // Preferred labels in order: flights that touch this day rendered at
+      // their stable row index (with empty-row spacers so a flight stays in
+      // the same vertical position across all its days), then "Where"
+      // events, then a trip-name fallback so the trip is still visible on
+      // bare days.
       let items;
-      if (chains.length > 0) {
-        items = chains.map(c => ({
-          label: c.label,
-          start: c.start,
-          end: c.end,
-          color: c.color || "indigo",
-          href: `index.html?trip=${encodeURIComponent(t.id)}`,
-          tooltip: `${c.tooltip} — ${t.name}`,
-        }));
+      if (flightsToday.length > 0) {
+        const maxRow = Math.max(...flightsToday.map(e => e._row || 0));
+        items = [];
+        for (let r = 0; r <= maxRow; r++) {
+          const f = flightsToday.find(e => (e._row || 0) === r);
+          if (f) {
+            const codes = extractFlightCodes(f.title);
+            const label = codes ? `${codes.from}–${codes.to}` : (f.title || "Flight");
+            items.push({
+              label,
+              start: f.start,
+              end: f.end,
+              color: f.color || "indigo",
+              href: `index.html?trip=${encodeURIComponent(t.id)}`,
+              tooltip: `${f.title} — ${t.name}`,
+            });
+          } else {
+            items.push({ _spacer: true });
+          }
+        }
       } else if (locs.length > 0) {
         items = locs.map(e => ({
           label: e.title,
@@ -461,6 +490,13 @@ function renderMonth(monthDate, trips, tripLocations, tripFlightChains) {
       }
 
       items.forEach(item => {
+        if (item._spacer) {
+          // Reserve vertical slot so the flight below stays at its row.
+          const sp = document.createElement("div");
+          sp.className = "cal-trip cal-spacer";
+          cell.appendChild(sp);
+          return;
+        }
         const bar = document.createElement("a");
         bar.className = `cal-trip ${colorClass(item.color)}`;
         bar.href = item.href;
