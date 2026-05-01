@@ -840,7 +840,61 @@ const AIRPORT_TZ = {
   DXB: "Asia/Dubai",
   DOH: "Asia/Qatar",
   IST: "Europe/Istanbul",
+  // US domestic
+  TPA: "America/New_York",
+  MIA: "America/New_York",
+  ATL: "America/New_York",
+  BOS: "America/New_York",
+  PHL: "America/New_York",
+  IAD: "America/New_York",
+  DCA: "America/New_York",
+  CLT: "America/New_York",
+  MCO: "America/New_York",
+  FLL: "America/New_York",
+  DTW: "America/Detroit",
+  MSP: "America/Chicago",
+  DFW: "America/Chicago",
+  IAH: "America/Chicago",
+  AUS: "America/Chicago",
+  MSY: "America/Chicago",
+  STL: "America/Chicago",
+  MCI: "America/Chicago",
+  MEM: "America/Chicago",
+  DEN: "America/Denver",
+  SLC: "America/Denver",
+  PHX: "America/Phoenix",
+  LAS: "America/Los_Angeles",
+  SFO: "America/Los_Angeles",
+  SAN: "America/Los_Angeles",
+  PDX: "America/Los_Angeles",
+  HNL: "Pacific/Honolulu",
+  ANC: "America/Anchorage",
 };
+
+// City name → IATA code, for parsers that get city names instead of codes.
+const CITY_TO_CODE = {
+  SEATTLE: "SEA", TAMPA: "TPA", MIAMI: "MIA", ATLANTA: "ATL",
+  BOSTON: "BOS", DENVER: "DEN", PORTLAND: "PDX", CHICAGO: "ORD",
+  HOUSTON: "IAH", DALLAS: "DFW", PHOENIX: "PHX", DETROIT: "DTW",
+  MINNEAPOLIS: "MSP", PHILADELPHIA: "PHL", ORLANDO: "MCO",
+  HONOLULU: "HNL", ANCHORAGE: "ANC", VANCOUVER: "YVR",
+  NEWYORK: "JFK", LASVEGAS: "LAS", LOSANGELES: "LAX",
+  SANFRANCISCO: "SFO", SANDIEGO: "SAN", SALTLAKECITY: "SLC",
+  WASHINGTON: "IAD", NEWORLEANS: "MSY", FORTLAUDERDALE: "FLL",
+  CHARLOTTE: "CLT", AUSTIN: "AUS", LONDON: "LHR", PARIS: "CDG",
+  FRANKFURT: "FRA", AMSTERDAM: "AMS", TOKYO: "NRT", ZURICH: "ZRH",
+  DUBLIN: "DUB", DUBAI: "DXB", DOHA: "DOH", ISTANBUL: "IST",
+};
+const AIRLINE_CODE = {
+  DELTA: "DL", UNITED: "UA", AMERICAN: "AA", SOUTHWEST: "WN",
+  ALASKA: "AS", JETBLUE: "B6", SPIRIT: "NK", FRONTIER: "F9",
+  HAWAIIAN: "HA", AIRCANADA: "AC", LUFTHANSA: "LH",
+  BRITISHAIRWAYS: "BA", AIRFRANCE: "AF", KLM: "KL",
+};
+function cityToCode(name) {
+  const k = name.replace(/\s+/g, "").toUpperCase();
+  return CITY_TO_CODE[k] || k.slice(0, 3);
+}
 
 function to24h(hhmm, ampm) {
   let [h, m] = hhmm.split(":").map(Number);
@@ -967,6 +1021,128 @@ function parseReservation(text, defaultYear) {
     end: end || start,
     notes: "Added via reservation paste",
   }];
+}
+
+// Parse Delta-style itinerary blocks where each flight reads:
+//   Sat, 19DEC      DEPART      ARRIVE
+//   DELTA 358
+//   Delta Comfort Classic (S)\tSEATTLE
+//   11:55AM\tTAMPA
+//   08:21PM
+// City names are spelled out (not codes) and dates have no year.
+function parseDeltaItinerary(text, defaultYear) {
+  const rawLines = text.split(/\r?\n/);
+  const dateRx = /^([A-Za-z]{3}),\s*(\d{1,2})([A-Z]{3})/;
+  const monthMap = { JAN:1, FEB:2, MAR:3, APR:4, MAY:5, JUN:6, JUL:7, AUG:8, SEP:9, OCT:10, NOV:11, DEC:12 };
+  const blocks = [];
+  let cur = null;
+  for (const line of rawLines) {
+    const dm = line.trim().match(dateRx);
+    if (dm) {
+      if (cur) blocks.push(cur);
+      cur = { dm, lines: [] };
+    } else if (cur) {
+      cur.lines.push(line);
+    }
+  }
+  if (cur) blocks.push(cur);
+  if (blocks.length === 0) return null;
+
+  // Need to see "AIRLINE FLIGHTNUM" as the first non-blank body line of at
+  // least one block — otherwise this isn't a Delta-style paste.
+  const looksDelta = blocks.some(b => {
+    const firstReal = b.lines.map(l => l.trim()).find(Boolean);
+    return firstReal && /^[A-Z]{2,}\s+\d{1,4}\s*$/.test(firstReal);
+  });
+  if (!looksDelta) return null;
+
+  const events = [];
+  let yearOffset = 0;
+  let prevMon = null;
+
+  for (const block of blocks) {
+    const day = +block.dm[2];
+    const mon = monthMap[block.dm[3]];
+    if (!mon) continue;
+    if (prevMon !== null && mon < prevMon) yearOffset++;
+    prevMon = mon;
+    const year = defaultYear + yearOffset;
+
+    let flightNum = null, depCity = null, arrCity = null, depTime = null, arrTime = null;
+    for (const raw of block.lines) {
+      const line = raw.trim();
+      if (!line) continue;
+
+      let m;
+      // Flight number line: "DELTA 358"
+      if (!flightNum && (m = line.match(/^([A-Z]{2,})\s+(\d{1,4})\s*$/))) {
+        const code = AIRLINE_CODE[m[1]] || m[1].slice(0, 2);
+        flightNum = `${code}${m[2]}`;
+        continue;
+      }
+
+      // Tab-separated cabin/time + city ("11:55AM\tTAMPA").
+      const parts = raw.split("\t").map(p => p.trim()).filter(Boolean);
+      const timeAt = (s) => s.match(/^(\d{1,2}:\d{2})\s*(AM|PM)\s*$/i);
+      if (parts.length >= 2) {
+        const left = parts[0], right = parts[parts.length - 1];
+        const lt = timeAt(left);
+        if (lt) {
+          // Time on the left → arrival city on the right.
+          if (!depTime) depTime = to24h(lt[1], lt[2].toUpperCase());
+          else if (!arrTime) arrTime = to24h(lt[1], lt[2].toUpperCase());
+          if (right && /^[A-Z][A-Z ]+$/.test(right)) {
+            if (depCity && !arrCity) arrCity = right;
+            else if (!depCity) depCity = right;
+          }
+          continue;
+        }
+        if (right && /^[A-Z][A-Z ]+$/.test(right)) {
+          if (!depCity) depCity = right;
+          else if (!arrCity) arrCity = right;
+          continue;
+        }
+      }
+
+      // Bare time line: "08:21PM"
+      const t = timeAt(line);
+      if (t) {
+        if (!depTime) depTime = to24h(t[1], t[2].toUpperCase());
+        else if (!arrTime) arrTime = to24h(t[1], t[2].toUpperCase());
+        continue;
+      }
+      // Bare city line.
+      if (/^[A-Z][A-Z ]+$/.test(line)) {
+        if (!depCity) depCity = line;
+        else if (!arrCity) arrCity = line;
+      }
+    }
+
+    if (!depCity || !arrCity || !depTime || !arrTime) continue;
+
+    const depCode = cityToCode(depCity);
+    const arrCode = cityToCode(arrCity);
+
+    let endY = year, endM = mon, endD = day;
+    if (arrTime < depTime) {
+      const d2 = new Date(year, mon - 1, day);
+      d2.setDate(d2.getDate() + 1);
+      endY = d2.getFullYear(); endM = d2.getMonth() + 1; endD = d2.getDate();
+    }
+    const startISO = `${year}-${String(mon).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
+    const endISO   = `${endY}-${String(endM).padStart(2,"0")}-${String(endD).padStart(2,"0")}`;
+
+    events.push({
+      id: uid(),
+      title: `${flightNum || "Flight"} ${depCode} → ${arrCode}`,
+      lane: "flights", color: "indigo",
+      start: startISO, startTime: depTime, startTz: AIRPORT_TZ[depCode] || "UTC",
+      end:   endISO,   endTime:   arrTime, endTz:   AIRPORT_TZ[arrCode] || "UTC",
+      notes: `${depCity.replace(/\s+/g,' ').trim()} → ${arrCity.replace(/\s+/g,' ').trim()}`,
+    });
+  }
+
+  return events.length ? events : null;
 }
 
 function parseRangeFromText(text, defaultYear) {
@@ -1603,6 +1779,7 @@ function wirePasteBlock({ inputId, parseId, clearId, statusId, targetId }) {
 
     let events = parseCommand(text, defaultYear);
     if (!events) events = parseReservation(text, defaultYear);
+    if (!events) events = parseDeltaItinerary(text, defaultYear);
     if (!events) events = parseFlights(text, defaultYear);
 
     if (!events || events.length === 0) {

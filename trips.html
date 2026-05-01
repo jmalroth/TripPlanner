@@ -385,20 +385,12 @@ function renderMonth(monthDate, trips, tripLocations, tripFlights) {
       const locs = (tripLocations[t.id] || []).filter(e => dayISO >= e.start && dayISO <= e.end);
       const flights = (tripFlights[t.id] || []).filter(e => dayISO >= e.start && dayISO <= e.end);
 
-      // Preferred labels in order: "Where" events for this day, then any
-      // flights that touch this day rendered as "YVR-ZNZ" codes, then a
+      // Preferred labels in order: a flight that touches this day (transit
+      // days are dominated by the flight, e.g. "JRO-CPT" matters more than
+      // overlapping safari/city stays), then "Where" events, then a
       // trip-name fallback so the trip is still visible on bare days.
       let items;
-      if (locs.length > 0) {
-        items = locs.map(e => ({
-          label: e.title,
-          start: e.start,
-          end: e.end,
-          color: e.color || "violet",
-          href: `index.html?trip=${encodeURIComponent(t.id)}`,
-          tooltip: `${e.title} — ${t.name} (${e.start}${e.end !== e.start ? ` → ${e.end}` : ""})`,
-        }));
-      } else if (flights.length > 0) {
+      if (flights.length > 0) {
         items = flights.map(e => {
           const codes = extractFlightCodes(e.title);
           const label = codes ? `${codes.from}–${codes.to}` : (e.title || "Flight");
@@ -411,6 +403,15 @@ function renderMonth(monthDate, trips, tripLocations, tripFlights) {
             tooltip: `${e.title} — ${t.name}`,
           };
         });
+      } else if (locs.length > 0) {
+        items = locs.map(e => ({
+          label: e.title,
+          start: e.start,
+          end: e.end,
+          color: e.color || "violet",
+          href: `index.html?trip=${encodeURIComponent(t.id)}`,
+          tooltip: `${e.title} — ${t.name} (${e.start}${e.end !== e.start ? ` → ${e.end}` : ""})`,
+        }));
       } else {
         items = [{
           label: t.name || "Untitled",
