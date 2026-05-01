@@ -174,10 +174,6 @@ function seed() {
   state.segmentSize = "auto";
   state.events = [
     // Where ----------------------------------------------------------
-    { id: uid(), title: "Vancouver", lane: "location", color: "violet",
-      start: "2026-06-17",
-      end:   "2026-06-17", endTime: "16:15", endTz: "America/Vancouver",
-      notes: "" },
     { id: uid(), title: "Zanzibar", lane: "location", color: "teal",
       start: "2026-06-19", startTime: "07:15", startTz: "Africa/Dar_es_Salaam",
       end:   "2026-06-24", endTime:   "12:10", endTz:   "Africa/Dar_es_Salaam",
@@ -186,10 +182,6 @@ function seed() {
       start: "2026-06-24", startTime: "13:15", startTz: "Africa/Dar_es_Salaam",
       end:   "2026-07-01", endTime:   "23:59", endTz:   "Africa/Dar_es_Salaam",
       notes: "8-day premium safari · Serengeti / Ngorongoro / Tarangire." },
-    { id: uid(), title: "Seattle", lane: "location", color: "violet",
-      start: "2026-07-09", startTime: "11:55", startTz: "America/Los_Angeles",
-      end:   "2026-07-09",
-      notes: "" },
 
     // Flights & layovers ---------------------------------------------
     { id: uid(), title: "LH493 YVR → FRA", lane: "flights", color: "indigo",

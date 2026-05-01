@@ -37,15 +37,17 @@
   .cal-empty { color: var(--muted); font-style: italic; padding: 20px; text-align: center; }
   .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
   .cal-dow { background: var(--panel-2); color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; padding: 6px 8px; text-align: center; }
-  .cal-day { background: var(--panel); min-height: 64px; padding: 4px 6px; position: relative; font-size: 12px; }
+  .cal-day { background: var(--panel); min-height: 64px; padding: 4px 0; position: relative; font-size: 12px; }
   .cal-day.other-month { background: var(--panel-2); color: var(--muted); }
   .cal-day.today .cal-day-num { background: var(--accent); color: #fff; border-radius: 50%; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; }
-  .cal-day-num { display: inline-block; }
-  .cal-trip { display: block; margin-top: 2px; padding: 2px 6px; color: #fff; font-size: 11px; border-radius: 3px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-decoration: none; }
+  .cal-day-num { display: inline-block; margin: 0 6px; }
+  .cal-trip { display: block; margin: 2px 4px 0; padding: 2px 6px; color: #fff; font-size: 11px; border-radius: 3px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-decoration: none; }
   .cal-trip:hover { filter: brightness(1.1); }
-  .cal-trip.continued { border-top-left-radius: 0; border-bottom-left-radius: 0; }
-  .cal-trip.continues { border-top-right-radius: 0; border-bottom-right-radius: 0; }
-  .cal-trip.empty-label { visibility: hidden; }
+  /* Bars that continue from the previous cell extend left to bridge the
+     grid gap and cell padding, and drop their left rounding. */
+  .cal-trip.continued { margin-left: -1px; padding-left: 11px; border-top-left-radius: 0; border-bottom-left-radius: 0; }
+  /* Bars that continue into the next cell do the same on the right. */
+  .cal-trip.continues { margin-right: -1px; padding-right: 11px; border-top-right-radius: 0; border-bottom-right-radius: 0; }
   .cal-trip.bg-indigo  { background: #6c8cff; }
   .cal-trip.bg-teal    { background: #2dd4bf; }
   .cal-trip.bg-amber   { background: #f59e0b; }
@@ -105,6 +107,39 @@ function writeRegistry(list) {
 }
 function newTripId() {
   return "t" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
+// One-time cleanup: drop location-lane events that fall entirely before the
+// first flight or entirely after the last flight (the "you are at home"
+// bookend cities like Vancouver/Seattle from the original Zanzibar seed).
+const BOOKEND_CLEANUP_KEY = "trip-builder-bookend-cleanup-v1";
+function cleanupBookendsOnce() {
+  if (localStorage.getItem(BOOKEND_CLEANUP_KEY)) return;
+  const list = readRegistry();
+  for (const t of list) {
+    try {
+      const raw = localStorage.getItem(TRIP_KEY_PREFIX + t.id);
+      if (!raw) continue;
+      const blob = JSON.parse(raw);
+      if (!Array.isArray(blob.events) || blob.events.length === 0) continue;
+      const flights = blob.events.filter(e =>
+        e.lane === "flights" && !(e.title || "").endsWith("layover"));
+      if (flights.length === 0) continue;
+      const firstStart = flights.reduce((a, e) => e.start < a ? e.start : a, flights[0].start);
+      const lastEnd    = flights.reduce((a, e) => e.end   > a ? e.end   : a, flights[0].end);
+      blob.events = blob.events.filter(e => {
+        if (e.lane !== "location") return true;
+        // A bookend "starting city" ends on or before the first flight's
+        // departure day; a "ending city" starts on or after the last
+        // flight's arrival day.
+        if (e.end   <= firstStart) return false;
+        if (e.start >= lastEnd)    return false;
+        return true;
+      });
+      localStorage.setItem(TRIP_KEY_PREFIX + t.id, JSON.stringify(blob));
+    } catch (e) { /* ignore */ }
+  }
+  localStorage.setItem(BOOKEND_CLEANUP_KEY, "1");
 }
 
 // Migrate any legacy single-trip blob on first visit so it shows up in the list.
@@ -359,13 +394,10 @@ function renderMonth(monthDate, trips, tripLocations) {
           }];
 
       items.forEach(item => {
-        const isFirstDay = dayISO === item.start;
-        const showLabel = isFirstDay || isWeekStart;
         const bar = document.createElement("a");
         bar.className = `cal-trip ${colorClass(item.color)}`;
         bar.href = item.href;
-        bar.textContent = showLabel ? item.label : "";
-        if (!showLabel) bar.classList.add("empty-label");
+        bar.textContent = item.label;
         bar.title = item.tooltip;
         if (dayISO !== item.start && !isWeekStart) bar.classList.add("continued");
         if (dayISO !== item.end && dow !== 6) bar.classList.add("continues");
@@ -407,6 +439,7 @@ document.getElementById("new-trip-form").addEventListener("submit", (e) => {
   window.location.href = `index.html?trip=${encodeURIComponent(id)}`;
 });
 
+cleanupBookendsOnce();
 render();
 setView(currentView);
 </script>
