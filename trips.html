@@ -32,11 +32,9 @@
   .view-toggle button + button { border-left: 1px solid var(--line); }
   .view-toggle button.active { background: var(--accent); color: #fff; }
 
-  .calendar-wrap { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
-  .cal-nav { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
-  .cal-nav h3 { margin: 0; font-size: 16px; }
-  .cal-nav button { background: transparent; border: 1px solid var(--line); color: var(--text); padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 13px; }
-  .cal-nav button:hover { border-color: var(--accent); color: var(--accent); }
+  .calendar-wrap { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin-bottom: 14px; }
+  .cal-month-title { margin: 0 0 10px; font-size: 16px; }
+  .cal-empty { color: var(--muted); font-style: italic; padding: 20px; text-align: center; }
   .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
   .cal-dow { background: var(--panel-2); color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; padding: 6px 8px; text-align: center; }
   .cal-day { background: var(--panel); min-height: 64px; padding: 4px 6px; position: relative; font-size: 12px; }
@@ -81,14 +79,7 @@
     </div>
 
     <div id="calendar-view" hidden>
-      <div class="calendar-wrap">
-        <div class="cal-nav">
-          <button id="cal-prev" type="button">‹ Prev</button>
-          <h3 id="cal-title"></h3>
-          <button id="cal-next" type="button">Next ›</button>
-        </div>
-        <div id="cal-grid" class="cal-grid"></div>
-      </div>
+      <div id="calendar-months"></div>
     </div>
   </div>
 
@@ -212,7 +203,6 @@ function render() {
 // --- calendar view ---
 
 const VIEW_KEY = "trip-builder-trips-view";
-const CAL_MONTH_KEY = "trip-builder-trips-cal-month";
 
 let currentView = localStorage.getItem(VIEW_KEY) || "list";
 
@@ -233,16 +223,6 @@ function sameDay(a, b) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
 
-let calCursor = (() => {
-  const saved = localStorage.getItem(CAL_MONTH_KEY);
-  if (saved) {
-    const [y, m] = saved.split("-").map(Number);
-    return new Date(y, m - 1, 1);
-  }
-  const t = new Date();
-  return new Date(t.getFullYear(), t.getMonth(), 1);
-})();
-
 function setView(v) {
   currentView = v;
   localStorage.setItem(VIEW_KEY, v);
@@ -256,20 +236,52 @@ function setView(v) {
 
 function renderCalendar() {
   const trips = readRegistry().filter(t => t.start && t.end);
+  const container = document.getElementById("calendar-months");
+  container.innerHTML = "";
 
-  const year = calCursor.getFullYear();
-  const month = calCursor.getMonth();
-  const monthName = calCursor.toLocaleString(undefined, { month: "long", year: "numeric" });
-  document.getElementById("cal-title").textContent = monthName;
-  localStorage.setItem(CAL_MONTH_KEY, `${year}-${String(month + 1).padStart(2,"0")}`);
+  if (trips.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "cal-empty";
+    empty.textContent = "No trips with dates yet — create one to see it on the calendar.";
+    container.appendChild(empty);
+    return;
+  }
 
-  const firstOfMonth = new Date(year, month, 1);
-  // Start grid on Sunday of the week containing the 1st.
-  const gridStart = addDays(firstOfMonth, -firstOfMonth.getDay());
+  // Collect every (year, month) that any trip touches.
+  const monthSet = new Set();
+  trips.forEach(t => {
+    const s = parseISO(t.start);
+    const e = parseISO(t.end);
+    let cur = new Date(s.getFullYear(), s.getMonth(), 1);
+    const last = new Date(e.getFullYear(), e.getMonth(), 1);
+    while (cur <= last) {
+      monthSet.add(`${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, "0")}`);
+      cur = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
+    }
+  });
+
+  const months = [...monthSet].sort().map(s => {
+    const [y, m] = s.split("-").map(Number);
+    return new Date(y, m - 1, 1);
+  });
+
+  months.forEach(monthDate => container.appendChild(renderMonth(monthDate, trips)));
+}
+
+function renderMonth(monthDate, trips) {
+  const year = monthDate.getFullYear();
+  const month = monthDate.getMonth();
   const today = new Date();
 
-  const grid = document.getElementById("cal-grid");
-  grid.innerHTML = "";
+  const wrap = document.createElement("div");
+  wrap.className = "calendar-wrap";
+  const title = document.createElement("h3");
+  title.className = "cal-month-title";
+  title.textContent = monthDate.toLocaleString(undefined, { month: "long", year: "numeric" });
+  wrap.appendChild(title);
+
+  const grid = document.createElement("div");
+  grid.className = "cal-grid";
 
   ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].forEach(d => {
     const h = document.createElement("div");
@@ -278,7 +290,9 @@ function renderCalendar() {
     grid.appendChild(h);
   });
 
-  // 6 rows × 7 days = 42 cells (covers any month).
+  const firstOfMonth = new Date(year, month, 1);
+  const gridStart = addDays(firstOfMonth, -firstOfMonth.getDay());
+
   for (let i = 0; i < 42; i++) {
     const day = addDays(gridStart, i);
     const cell = document.createElement("div");
@@ -297,8 +311,6 @@ function renderCalendar() {
       if (dayISO < t.start || dayISO > t.end) return;
       const isFirstDay = dayISO === t.start;
       const isWeekStart = dow === 0;
-      // Only label the bar on the trip's first day or the first day of a week
-      // (so it visually continues across the row without repeating the name).
       const showLabel = isFirstDay || isWeekStart;
       const bar = document.createElement("a");
       bar.className = "cal-trip";
@@ -313,6 +325,9 @@ function renderCalendar() {
 
     grid.appendChild(cell);
   }
+
+  wrap.appendChild(grid);
+  return wrap;
 }
 
 document.getElementById("view-toggle").addEventListener("click", (e) => {
@@ -320,15 +335,6 @@ document.getElementById("view-toggle").addEventListener("click", (e) => {
   if (!btn) return;
   setView(btn.dataset.view);
 });
-document.getElementById("cal-prev").addEventListener("click", () => {
-  calCursor = new Date(calCursor.getFullYear(), calCursor.getMonth() - 1, 1);
-  renderCalendar();
-});
-document.getElementById("cal-next").addEventListener("click", () => {
-  calCursor = new Date(calCursor.getFullYear(), calCursor.getMonth() + 1, 1);
-  renderCalendar();
-});
-
 document.getElementById("new-trip-form").addEventListener("submit", (e) => {
   e.preventDefault();
   const name = document.getElementById("nt-name").value.trim();

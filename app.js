@@ -845,6 +845,76 @@ function parseCommand(text, defaultYear) {
   }];
 }
 
+// Parse hotel/reservation confirmations that have labeled date fields:
+// "Arrive: Saturday, Dec 19, 2026" / "Depart: Saturday, Dec 26, 2026" / "Check-in" /
+// "Check-out". Used for Disney/Marriott/Airbnb/etc. confirmation pastes.
+function parseReservation(text, defaultYear) {
+  const monthMap = {
+    jan:1, feb:2, mar:3, apr:4, may:5, jun:6, jul:7, aug:8, sep:9, oct:10, nov:11, dec:12,
+    january:1, february:2, march:3, april:4, june:6, july:7, august:8, september:9, october:10, november:11, december:12,
+  };
+  const dowDateRx = /(?:(?:sun|mon|tue|wed|thu|fri|sat)[a-z]*[,\s]+)?([a-z]+)\.?\s+(\d{1,2})(?:,?\s+(\d{4}))?/i;
+
+  function dateAfter(labels) {
+    const lower = text.toLowerCase();
+    for (const label of labels) {
+      const idx = lower.indexOf(label.toLowerCase());
+      if (idx < 0) continue;
+      const after = text.slice(idx + label.length);
+      const m = after.match(dowDateRx);
+      if (!m) continue;
+      const mo = monthMap[m[1].toLowerCase()];
+      if (!mo) continue;
+      const y = m[3] ? +m[3] : defaultYear;
+      return `${y}-${String(mo).padStart(2,"0")}-${String(+m[2]).padStart(2,"0")}`;
+    }
+    return null;
+  }
+
+  const start = dateAfter(["Arrive:", "Arrival:", "Check-in", "Check in"]);
+  const end   = dateAfter(["Depart:", "Departure:", "Check-out", "Check out"]);
+  // Require an Arrive/Check-in label so this doesn't fire on flight pastes
+  // or random text that happens to contain a date.
+  if (!start) return null;
+
+  const isLodging = /\b(hotel|resort|villa|inn|suite|lodge|bnb|airbnb|vrbo)\b/i.test(text);
+  const lane = isLodging ? "lodging" : (end && end !== start ? "lodging" : "activities");
+
+  // Extract a venue title. First preference: the line right after a bare
+  // "Hotel" / "Resort" / "Property" header.
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  let title = null;
+  for (let i = 0; i < lines.length - 1; i++) {
+    if (/^(hotel|resort|property|accommodation)s?\s*$/i.test(lines[i])) {
+      title = lines[i + 1];
+      break;
+    }
+  }
+  // Fallback: first non-label, non-date, non-address-looking line.
+  if (!title) {
+    for (const line of lines) {
+      if (/^(date|confirmation|arrive|arrival|depart|departure|guests?|hotel|address|check[\s-]?in|check[\s-]?out|reservation)/i.test(line)) continue;
+      if (dowDateRx.test(line) && line.length < 40) continue;
+      if (/^\d/.test(line)) continue;
+      if (line.length > 80) continue;
+      title = line;
+      break;
+    }
+  }
+  if (!title) title = isLodging ? "Hotel reservation" : "Reservation";
+
+  const colorMap = { lodging: "amber", flights: "indigo", activities: "emerald", location: "violet" };
+  return [{
+    id: uid(),
+    title,
+    lane,
+    color: colorMap[lane] || "amber",
+    start,
+    end: end || start,
+    notes: "Added via reservation paste",
+  }];
+}
+
 function parseRangeFromText(text, defaultYear) {
   const start = consumeDate(text, defaultYear);
   if (!start) return null;
@@ -1478,6 +1548,7 @@ function wirePasteBlock({ inputId, parseId, clearId, statusId, targetId }) {
       : new Date().getFullYear();
 
     let events = parseCommand(text, defaultYear);
+    if (!events) events = parseReservation(text, defaultYear);
     if (!events) events = parseFlights(text, defaultYear);
 
     if (!events || events.length === 0) {
