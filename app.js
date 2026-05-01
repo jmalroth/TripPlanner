@@ -407,6 +407,12 @@ function renderTimeline(container, rangeStart, rangeEnd, opts) {
   const events = opts.events || state.events;
   const totalDays = dayDiff(rangeStart, rangeEnd) + 1;
 
+  // Lane area's pixel width = container - lane label column. Used to compute
+  // bar widths in pixels for stretch mode so very short events don't collapse
+  // to flex/intrinsic size when the calc result would be ~0.
+  const LANE_LABEL_PX = 110;
+  const stretchLanePx = Math.max(200, (container.clientWidth || 600) - LANE_LABEL_PX);
+
   const dayUtcBounds = [];
   for (let i = 0; i < totalDays; i++) {
     const ds = toISO(addDays(parseDay(rangeStart), i));
@@ -537,11 +543,22 @@ function renderTimeline(container, rangeStart, rangeEnd, opts) {
         bar.style.left = `${leftPx + 1}px`;
         bar.style.width = `${Math.max(2, rightPx - leftPx - 2)}px`;
       } else {
-        bar.style.left = `calc(${(leftFrac / totalDays) * 100}% + 1px)`;
-        bar.style.width = `calc(${((rightFrac - leftFrac) / totalDays) * 100}% - 2px)`;
+        // Compute in pixels so a 1-hour bar isn't expanded by the .event's
+        // intrinsic min-content (padding+border would otherwise force ~19px
+        // and cause sequential events to overlap).
+        const leftPx = (leftFrac / totalDays) * stretchLanePx;
+        const widthPx = Math.max(2, ((rightFrac - leftFrac) / totalDays) * stretchLanePx - 2);
+        bar.style.left = `${leftPx + 1}px`;
+        bar.style.width = `${widthPx}px`;
+        // Drop text + padding when there isn't room — keeps the bar's actual
+        // pixel width honest so adjacent events don't overlap.
+        if (widthPx < 28) {
+          bar.style.padding = "0";
+          bar.dataset.narrow = "1";
+        }
       }
       bar.style.top = `calc(${row} * (var(--row-h) + 4px) + 4px)`;
-      bar.textContent = ev.title;
+      bar.textContent = bar.dataset.narrow ? "" : ev.title;
       bar.title = makeTitle(ev);
       bar.addEventListener("click", () => openEventDialog(ev.id, ev._optionId || null));
       laneArea.appendChild(bar);
@@ -915,7 +932,7 @@ function parseCommand(text, defaultYear) {
   if (!trimmed) return null;
   if (!/^add\b/i.test(trimmed)) return null;
 
-  const m = trimmed.match(/^add\s+(?:(hotel|hotels|lodging|flight|flights|activity|activities|location|where)\s+)?(?:placeholder\s+)?(?:on\s+)?(.+)$/i);
+  const m = trimmed.match(/^add\s+(?:(hotel|hotels|lodging|flight|flights|activity|activities|location|where|cruise)\s+)?(?:placeholder\s+)?(?:on\s+)?(.+)$/i);
   if (!m) return null;
 
   const laneWord = (m[1] || "").toLowerCase();
@@ -926,8 +943,17 @@ function parseCommand(text, defaultYear) {
     flight: "flights", flights: "flights",
     activity: "activities", activities: "activities",
     location: "location", where: "location",
+    cruise: "lodging",
   };
-  const lane = laneMap[laneWord] || "activities";
+  // Detect lane from keyword OR from words anywhere in the rest of the
+  // command (e.g. "add disney cruise from FLL on Dec 27-Jan 3" → lodging).
+  let lane = laneMap[laneWord];
+  if (!lane) {
+    if (/\bcruise\b/i.test(rest)) lane = "lodging";
+    else if (/\b(hotel|resort|villa|lodge|airbnb|vrbo)\b/i.test(rest)) lane = "lodging";
+    else if (/\bflight\b/i.test(rest)) lane = "flights";
+    else lane = "activities";
+  }
 
   const range = parseRangeFromText(rest, defaultYear);
   if (!range) return null;
@@ -1074,54 +1100,59 @@ function parseCruise(text, defaultYear) {
 // "Hawaii Mar 1 to Mar 8", or "concert on jul 4". Handles cases where the
 // stricter parseCommand doesn't fire because there's no "add" prefix.
 function parseLooseEvent(text, defaultYear) {
-  const trimmed = text.trim();
+  let trimmed = text.trim();
   if (!trimmed) return null;
-  // Bail if it looks like a multi-line paste (flight blocks, reservations, etc.)
   if (trimmed.split(/\r?\n/).filter(l => l.trim()).length > 2) return null;
+  trimmed = trimmed.replace(/^add\s+(?:placeholder\s+)?/i, "");
 
-  // Try "<title> from DATE to DATE" / "<title> DATE - DATE" / "<title> on DATE".
-  const monthWord = "(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*";
-  const dateBit = `(?:${monthWord}\\.?\\s+\\d{1,2}(?:,?\\s+\\d{4})?|\\d{4}-\\d{2}-\\d{2}|\\d{1,2}\\/\\d{1,2}(?:\\/\\d{2,4})?)`;
-  // Second slot also accepts a bare day number ("Dec 19-26" → end is "26").
-  const dateBitOrDay = `(?:${dateBit}|\\d{1,2})`;
-  const rangeRx = new RegExp(
-    `^(.+?)\\s+(?:from\\s+)?(${dateBit})(?:\\s*(?:to|through|until|\\-|\\u2013)\\s*(${dateBitOrDay}))?\\s*$`,
-    "i"
-  );
-  const onRx = new RegExp(
-    `^(.+?)\\s+on\\s+(${dateBit})\\s*$`,
-    "i"
-  );
-  // Try onRx first so "concert on jul 4" doesn't leave "on" stuck on the title.
-  let m = trimmed.match(onRx) || trimmed.match(rangeRx);
-  if (!m) return null;
-  let title = m[1].trim();
-  const startStr = m[2];
-  const endStr = m[3] || null;
-
-  function parseDateBit(s) {
-    // Reuse consumeDate by passing prefix-trimmed input.
-    const r = consumeDate(s.trim(), defaultYear);
-    return r ? r.iso : null;
-  }
-  const start = parseDateBit(startStr);
-  if (!start) return null;
-  let end = endStr ? parseDateBit(endStr) : null;
-  // "Dec 19-26" — second date might be just a day number; reuse the first
-  // month/year if so.
-  if (endStr && !end) {
-    const dayOnly = endStr.match(/^\s*(\d{1,2})\s*$/);
-    if (dayOnly) {
-      const [y, mo] = start.split("-");
-      end = `${y}-${mo}-${String(+dayOnly[1]).padStart(2,"0")}`;
+  // Scan the whole string for date references. A token is either "Month Day"
+  // (Dec 27, jan1, December 27, 2026) or a bare day number that inherits the
+  // most recently seen month/year. Year auto-rolls forward when a later
+  // month wraps below an earlier one (Dec→Jan).
+  const monthMap = {
+    jan:1, feb:2, mar:3, apr:4, may:5, jun:6, jul:7, aug:8, sep:9, sept:9, oct:10, nov:11, dec:12,
+    january:1, february:2, march:3, april:4, june:6, july:7, august:8, september:9, october:10, november:11, december:12,
+  };
+  const tokenRx = /\b(?:(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s*)?(\d{1,2})(?:,?\s+(\d{4}))?\b/gi;
+  const dates = [];
+  let firstDateIdx = -1;
+  let curYear = defaultYear;
+  let curMonth = null;
+  let prevMonth = null;
+  let mm;
+  while ((mm = tokenRx.exec(trimmed)) !== null) {
+    let matchedMonth = false;
+    if (mm[1]) {
+      const newMonth = monthMap[mm[1].toLowerCase()];
+      if (newMonth) {
+        if (prevMonth !== null && newMonth < prevMonth) curYear++;
+        curMonth = newMonth;
+        prevMonth = newMonth;
+        matchedMonth = true;
+      }
     }
+    if (mm[3]) curYear = +mm[3];
+    if (curMonth === null) continue; // bare day before any month → skip
+    const day = +mm[2];
+    if (day < 1 || day > 31) continue;
+    if (firstDateIdx < 0) firstDateIdx = mm.index;
+    dates.push(`${curYear}-${String(curMonth).padStart(2,"0")}-${String(day).padStart(2,"0")}`);
   }
-  if (!end) end = start;
+  if (dates.length === 0) return null;
+
+  const start = dates[0];
+  const end = dates[dates.length - 1];
+
+  // Title is everything before the first date, with trailing connector words
+  // (on, from, at, in, during) stripped.
+  let title = trimmed.slice(0, firstDateIdx).trim();
+  title = title.replace(/\s+(?:on|from|at|in|during)\s*$/i, "").trim();
+  if (!title) title = "Event";
 
   // Lane heuristic: a lodging/flight/activity keyword wins; otherwise a
   // multi-day stretch defaults to a location, single day to an activity.
   let lane = "location";
-  if (/\b(hotel|hotels|lodging|inn|resort|villa|airbnb)\b/i.test(title)) lane = "lodging";
+  if (/\b(hotel|hotels|lodging|inn|resort|villa|airbnb|vrbo|cruise|cruises)\b/i.test(title)) lane = "lodging";
   else if (/\b(flight|flights)\b/i.test(title)) lane = "flights";
   else if (/\b(activity|activities|tour|excursion|concert|show|game|dinner)\b/i.test(title)) lane = "activities";
   else if (start === end) lane = "activities";
@@ -1269,7 +1300,9 @@ function parseRangeFromText(text, defaultYear) {
   if (!start) return null;
   let remainder = text.slice(start.consumed).trim();
   let end = null;
-  const toMatch = remainder.match(/^(?:to|through|\-|until)\s+/i);
+  // Allow "to/through/until" with required space, OR "-" / en-dash with no
+  // space ("Dec 27-Jan 3" or "Dec 27-Jan3").
+  const toMatch = remainder.match(/^(?:(?:to|through|until)\s+|[\-–]\s*)/i);
   if (toMatch) {
     const after = remainder.slice(toMatch[0].length);
     const endParse = consumeDate(after, defaultYear);
@@ -1286,8 +1319,8 @@ function consumeDate(text, defaultYear) {
     jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
     january: 1, february: 2, march: 3, april: 4, june: 6, july: 7, august: 8, september: 9, october: 10, november: 11, december: 12,
   };
-  // "Month Day[, Year]"
-  let m = text.match(/^([A-Za-z]+)\.?\s+(\d{1,2})(?:,?\s+(\d{4}))?\b/);
+  // "Month Day[, Year]" — also allow no space: "Jan3", "Dec25".
+  let m = text.match(/^([A-Za-z]+)\.?\s*(\d{1,2})(?:,?\s+(\d{4}))?\b/);
   if (m && monthMap[m[1].toLowerCase()]) {
     const mo = monthMap[m[1].toLowerCase()];
     const d = +m[2];
