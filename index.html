@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Trip Timeline Builder</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="trip-meta">
+      <input id="trip-name" type="text" placeholder="Trip name" />
+      <label>Start <input id="trip-start" type="date" /></label>
+      <label>End <input id="trip-end" type="date" /></label>
+      <span id="trip-length" class="trip-length"></span>
+    </div>
+    <div class="actions">
+      <label class="toggle">
+        <input id="tz-aware" type="checkbox" />
+        <span>Follow timezone</span>
+      </label>
+      <button id="add-event-btn" type="button">+ Add event</button>
+      <button id="clear-btn" type="button" class="ghost">Clear</button>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab-btn" data-tab="main">My itinerary</button>
+    <button class="tab-btn" data-tab="options">Options</button>
+  </nav>
+
+  <div class="tab-panel" id="tab-main">
+    <main>
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Whole trip</h2>
+          <span class="hint">Overview — entire trip on one row</span>
+        </div>
+        <div id="overview" class="timeline overview"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Breakdown</h2>
+          <div class="segment-controls">
+            <label>Group by
+              <select id="segment-size">
+                <option value="auto">Auto</option>
+                <option value="3">3 days</option>
+                <option value="7">Week</option>
+                <option value="14">2 weeks</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        <div id="breakdown" class="breakdown"></div>
+      </section>
+    </main>
+  </div>
+
+  <div class="tab-panel" id="tab-options" hidden>
+    <main>
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Travel options</h2>
+          <span class="hint">Stage alternative plans, then apply the one you pick</span>
+        </div>
+        <div class="options-controls">
+          <label>From <input id="option-range-start" type="date" /></label>
+          <label>To <input id="option-range-end" type="date" /></label>
+          <button id="add-option-btn" type="button">+ New option</button>
+        </div>
+        <div class="options-legend">
+          <span class="legend-swatch solid"></span> Confirmed (from itinerary)
+          <span class="legend-swatch dashed"></span> Option (candidate)
+        </div>
+        <details class="paste-block">
+          <summary>Paste flight data</summary>
+          <div class="paste-content">
+            <textarea id="paste-input" rows="8" placeholder="Paste a flight (Google Flights / Kayak / etc.) — or type a command:&#10;  add hotel on jul 7 for znz hotel&#10;  add activity on july 4 hiking&#10;  add lodging on jul 7 to jul 8 at riu palace"></textarea>
+            <div class="paste-actions">
+              <label>Add to
+                <select id="paste-target"></select>
+              </label>
+              <button id="paste-parse" type="button">Parse &amp; add</button>
+              <button id="paste-clear" type="button" class="ghost">Clear</button>
+            </div>
+            <div id="paste-status" class="paste-status"></div>
+            <details class="paste-help">
+              <summary>+ what can I paste?</summary>
+              <div class="paste-help-content">
+                <p><strong>Flight blocks</strong> — paste Google Flights / Kayak output. Multi-leg trips and layovers are handled. Both single-line ("Kenya AirwaysEconomyBoeing 737KQ 427") and multi-line ("Air Tanzania" / "Economy" / "ATR 72PW 721") formats work, plus <code>+1</code> / <code>+2</code> day-offset times.</p>
+                <p><strong>Plain-language commands</strong> — type instead of paste:</p>
+                <ul>
+                  <li><code>add hotel on jul 7 for znz hotel</code> — 1-day lodging titled "znz hotel"</li>
+                  <li><code>add lodging on jul 7 to jul 8 at riu palace</code> — 2-day lodging</li>
+                  <li><code>add activity on july 4 hiking</code></li>
+                  <li><code>add location on jul 5 cape town</code></li>
+                  <li><code>add flight on jul 6 jro to nbo</code> — generic flights-lane placeholder (use a real Google Flights paste if you want times &amp; TZ to flow through)</li>
+                </ul>
+                <p><strong>Date formats</strong>: <code>july 7</code>, <code>jul 7</code>, <code>2026-07-07</code>, <code>7/7</code>, <code>7/7/2026</code>. Year defaults to the trip's start year if omitted.</p>
+                <p><strong>Lane keywords</strong>: <code>hotel</code> / <code>hotels</code> / <code>lodging</code>, <code>flight</code> / <code>flights</code>, <code>activity</code> / <code>activities</code>, <code>location</code> / <code>where</code>. The word <code>placeholder</code> is tolerated, and a leading <code>for</code> or <code>at</code> before the title is stripped.</p>
+              </div>
+            </details>
+          </div>
+        </details>
+        <div id="options-list"></div>
+        <div id="options-comparison"></div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="event-dialog">
+    <form id="event-form" method="dialog">
+      <h3 id="event-dialog-title">Add event</h3>
+      <label>Title<input name="title" type="text" required /></label>
+      <div class="row-2">
+        <label>Lane
+          <select name="lane">
+            <option value="location">Where</option>
+            <option value="flights">Flights</option>
+            <option value="lodging">Lodging</option>
+            <option value="activities" selected>Activities</option>
+          </select>
+        </label>
+        <label>Color
+          <select name="color">
+            <option value="indigo">Indigo</option>
+            <option value="teal">Teal</option>
+            <option value="amber">Amber</option>
+            <option value="rose">Rose</option>
+            <option value="emerald">Emerald</option>
+            <option value="violet">Violet</option>
+            <option value="grey">Grey</option>
+          </select>
+        </label>
+      </div>
+      <div class="row-2">
+        <label>Start day<input name="start" type="date" required /></label>
+        <label>Start time<input name="startTime" type="time" /></label>
+      </div>
+      <div class="row-2">
+        <label>End day<input name="end" type="date" required /></label>
+        <label>End time<input name="endTime" type="time" /></label>
+      </div>
+      <label>Notes<textarea name="notes" rows="2"></textarea></label>
+      <input type="hidden" name="id" />
+      <input type="hidden" name="optionId" />
+      <div class="dialog-actions">
+        <button type="button" id="event-delete" class="danger" hidden>Delete</button>
+        <span class="spacer"></span>
+        <button type="button" id="event-cancel" class="ghost">Cancel</button>
+        <button type="submit" id="event-save">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>

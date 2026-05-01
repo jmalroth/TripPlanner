@@ -1,0 +1,1494 @@
+// Trip Timeline Builder — vanilla JS, persisted to localStorage.
+
+const STORAGE_KEY = "trip-builder-v7";
+
+const LANES = [
+  { key: "location",   label: "Where" },
+  { key: "lodging",    label: "Lodging" },
+  { key: "flights",    label: "Flights" },
+  { key: "activities", label: "Activities" },
+];
+
+const state = {
+  name: "",
+  start: null,
+  end: null,
+  events: [],
+  segmentSize: "auto",
+  tzAware: true,
+  homeTz: "America/Vancouver",
+  activeView: "main",       // "main" | "options"
+  options: [],              // [{ id, name, events: [...] }]
+  optionRangeStart: null,
+  optionRangeEnd: null,
+  shrunkDays: [],           // ISO dates the user has manually shrunk to a thin column
+};
+
+// --- date helpers (treat dates as plain calendar days, not instants) ---
+
+function parseDay(iso) {
+  if (!iso) return null;
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+
+function toISO(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function addDays(date, n) {
+  const d = new Date(date);
+  d.setDate(d.getDate() + n);
+  return d;
+}
+
+function dayDiff(a, b) {
+  const ms = parseDay(b) - parseDay(a);
+  return Math.round(ms / 86400000);
+}
+
+function fmtShort(date) {
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+// --- timezone helpers ---
+
+// Return UTC ms for a wall-clock time (y, m, d, h, mn) in tz.
+function wallToUtc(y, m, d, h, mn, tz) {
+  let guess = Date.UTC(y, m - 1, d, h, mn);
+  for (let i = 0; i < 2; i++) {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz, hour12: false,
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit",
+    }).formatToParts(new Date(guess));
+    const get = t => +parts.find(p => p.type === t).value;
+    let gh = get("hour"); if (gh === 24) gh = 0;
+    const wallAtGuess = Date.UTC(get("year"), get("month") - 1, get("day"), gh, get("minute"));
+    const offset = wallAtGuess - guess;
+    guess = Date.UTC(y, m - 1, d, h, mn) - offset;
+  }
+  return guess;
+}
+
+function dayStartUtcInTz(dateStr, tz) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return wallToUtc(y, m, d, 0, 0, tz);
+}
+
+function tzShortName(tz, dateStr) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const utc = wallToUtc(y, m, d, 12, 0, tz);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz, timeZoneName: "short",
+  }).formatToParts(new Date(utc));
+  const tn = parts.find(p => p.type === "timeZoneName");
+  return tn ? tn.value : "";
+}
+
+// --- persistence ---
+
+function load() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return seed();
+    Object.assign(state, JSON.parse(raw));
+  } catch (e) {
+    seed();
+  }
+}
+
+function save() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
+function seed() {
+  state.name = "Zanzibar 2026";
+  state.start = "2026-06-17";
+  state.end = "2026-07-09";
+  state.tzAware = true;
+  state.homeTz = "America/Vancouver";
+  state.segmentSize = "auto";
+  state.events = [
+    // Where ----------------------------------------------------------
+    { id: uid(), title: "Vancouver", lane: "location", color: "violet",
+      start: "2026-06-17",
+      end:   "2026-06-17", endTime: "16:15", endTz: "America/Vancouver",
+      notes: "" },
+    { id: uid(), title: "Zanzibar", lane: "location", color: "teal",
+      start: "2026-06-19", startTime: "07:15", startTz: "Africa/Dar_es_Salaam",
+      end:   "2026-06-24", endTime:   "12:10", endTz:   "Africa/Dar_es_Salaam",
+      notes: "" },
+    { id: uid(), title: "Tanzania safari", lane: "location", color: "amber",
+      start: "2026-06-24", startTime: "13:15", startTz: "Africa/Dar_es_Salaam",
+      end:   "2026-07-01", endTime:   "23:59", endTz:   "Africa/Dar_es_Salaam",
+      notes: "8-day premium safari · Serengeti / Ngorongoro / Tarangire." },
+    { id: uid(), title: "Seattle", lane: "location", color: "violet",
+      start: "2026-07-09", startTime: "11:55", startTz: "America/Los_Angeles",
+      end:   "2026-07-09",
+      notes: "" },
+
+    // Flights & layovers ---------------------------------------------
+    { id: uid(), title: "LH493 YVR → FRA", lane: "flights", color: "indigo",
+      start: "2026-06-17", startTime: "16:15", startTz: "America/Vancouver",
+      end:   "2026-06-18", endTime:   "11:00", endTz:   "Europe/Berlin",
+      notes: "Lufthansa · Business (P)" },
+    { id: uid(), title: "FRA layover", lane: "flights", color: "grey",
+      start: "2026-06-18", startTime: "11:00", startTz: "Europe/Berlin",
+      end:   "2026-06-18", endTime:   "19:35", endTz:   "Europe/Berlin",
+      notes: "Connection between LH493 and 4Y134." },
+    { id: uid(), title: "4Y134 FRA → ZNZ", lane: "flights", color: "indigo",
+      start: "2026-06-18", startTime: "19:35", startTz: "Europe/Berlin",
+      end:   "2026-06-19", endTime:   "07:15", endTz:   "Africa/Dar_es_Salaam",
+      notes: "Discover Airlines · Business (P)" },
+    { id: uid(), title: "UI 628 ZNZ → ARK", lane: "flights", color: "indigo",
+      start: "2026-06-24", startTime: "12:10", startTz: "Africa/Dar_es_Salaam",
+      end:   "2026-06-24", endTime:   "13:15", endTz:   "Africa/Dar_es_Salaam",
+      notes: "Auric Air · Economy · De Havilland Dash-8 · $242" },
+    { id: uid(), title: "4Y131 ZNZ → FRA", lane: "flights", color: "rose",
+      start: "2026-07-08", startTime: "08:00", startTz: "Africa/Dar_es_Salaam",
+      end:   "2026-07-08", endTime:   "16:05", endTz:   "Europe/Berlin",
+      notes: "Discover Airlines · Business (Z)" },
+    { id: uid(), title: "FRA overnight", lane: "flights", color: "grey",
+      start: "2026-07-08", startTime: "16:05", startTz: "Europe/Berlin",
+      end:   "2026-07-09", endTime:   "10:45", endTz:   "Europe/Berlin",
+      notes: "Overnight in FRA. Check in at the Lufthansa ticket counter." },
+    { id: uid(), title: "UA8717 FRA → SEA", lane: "flights", color: "rose",
+      start: "2026-07-09", startTime: "10:45", startTz: "Europe/Berlin",
+      end:   "2026-07-09", endTime:   "11:55", endTz:   "America/Los_Angeles",
+      notes: "Lufthansa (operating UA8717) · Business (Z)" },
+
+    // Lodging — safari lodges ---------------------------------------
+    { id: uid(), title: "Lake Duluti Safari Lodge", lane: "lodging", color: "amber",
+      start: "2026-06-24", end: "2026-06-24",
+      notes: "Arusha · Day 1 night" },
+    { id: uid(), title: "Acacia Farm Lodge", lane: "lodging", color: "amber",
+      start: "2026-06-25", end: "2026-06-25",
+      notes: "Karatu · Day 2 night" },
+    { id: uid(), title: "Conserve Safari Camp", lane: "lodging", color: "amber",
+      start: "2026-06-26", end: "2026-06-28",
+      notes: "Serengeti · Days 3–5 (3 nights)" },
+    { id: uid(), title: "Acacia Farm Lodge", lane: "lodging", color: "amber",
+      start: "2026-06-29", end: "2026-06-29",
+      notes: "Karatu · Day 6 night (second stay)" },
+    { id: uid(), title: "Lake Duluti Safari Lodge", lane: "lodging", color: "amber",
+      start: "2026-06-30", end: "2026-06-30",
+      notes: "Tarangire · Day 7 night — placeholder using the Arusha lodge (travel agency arranged)." },
+
+    // Activities — Tanzania safari day-by-day ------------------------
+    { id: uid(), title: "Day 1 · Arrival in Arusha", lane: "activities", color: "emerald",
+      start: "2026-06-24", end: "2026-06-24",
+      notes: "Lodging: 4★ hotel in Arusha." },
+    { id: uid(), title: "Day 2 · Ngorongoro Crater", lane: "activities", color: "emerald",
+      start: "2026-06-25", end: "2026-06-25",
+      notes: "Arusha → Ngorongoro Crater. Lodging: 4★ in Karatu." },
+    { id: uid(), title: "Day 3 · Drive to Serengeti", lane: "activities", color: "emerald",
+      start: "2026-06-26", end: "2026-06-26",
+      notes: "Ngorongoro → Serengeti National Park. Lodging: 4★ in Serengeti Plains." },
+    { id: uid(), title: "Day 4 · Central Serengeti", lane: "activities", color: "emerald",
+      start: "2026-06-27", end: "2026-06-27",
+      notes: "Central Serengeti exploration. Lodging: 4★ in Serengeti Plains." },
+    { id: uid(), title: "Day 5 · Serengeti game drives", lane: "activities", color: "emerald",
+      start: "2026-06-28", end: "2026-06-28",
+      notes: "Serengeti game drives. Lodging: 4★ in Serengeti Plains." },
+    { id: uid(), title: "Day 6 · Lake Eyasi & Karatu", lane: "activities", color: "emerald",
+      start: "2026-06-29", end: "2026-06-29",
+      notes: "Serengeti → Lake Eyasi → Karatu. Lodging: 4★ in Karatu." },
+    { id: uid(), title: "Day 7 · Tarangire", lane: "activities", color: "emerald",
+      start: "2026-06-30", end: "2026-06-30",
+      notes: "Karatu → Tarangire National Park. Lodging: 4★ in Tarangire." },
+    { id: uid(), title: "Day 8 · Departure from Arusha", lane: "activities", color: "emerald",
+      start: "2026-07-01", end: "2026-07-01",
+      notes: "Tarangire → Arusha → Departure." },
+  ];
+}
+
+function uid() {
+  return Math.random().toString(36).slice(2, 10);
+}
+
+// --- TZ map per day: which timezone is the user "in" on each day ---
+
+function computeDayTzMap(start, end, events, homeTz, tzAware) {
+  const map = {};
+  let cur = parseDay(start);
+  const endDate = parseDay(end);
+  let currentTz = homeTz;
+
+  // Group flight arrivals by date (only used when tzAware).
+  const arrByDate = {};
+  if (tzAware) {
+    for (const ev of events) {
+      if (ev.lane === "flights" && ev.endTz) {
+        (arrByDate[ev.end] ||= []).push(ev);
+      }
+    }
+  }
+
+  while (cur <= endDate) {
+    const ds = toISO(cur);
+    if (tzAware && arrByDate[ds] && arrByDate[ds].length) {
+      const latest = arrByDate[ds].slice().sort((a, b) =>
+        (a.endTime || "00:00").localeCompare(b.endTime || "00:00")).pop();
+      currentTz = latest.endTz;
+    }
+    map[ds] = currentTz;
+    cur = addDays(cur, 1);
+  }
+  return map;
+}
+
+// --- UTC bounds for an event ---
+
+function eventBounds(ev, dayTzMap, homeTz) {
+  const tzS = ev.startTz || dayTzMap[ev.start] || homeTz;
+  const tzE = ev.endTz   || dayTzMap[ev.end]   || homeTz;
+  const [sy, sm, sd] = ev.start.split("-").map(Number);
+  const [ey, em, ed] = ev.end.split("-").map(Number);
+  let sUtc, eUtc;
+  if (ev.startTime) {
+    const [h, mn] = ev.startTime.split(":").map(Number);
+    sUtc = wallToUtc(sy, sm, sd, h, mn, tzS);
+  } else {
+    sUtc = wallToUtc(sy, sm, sd, 0, 0, dayTzMap[ev.start] || homeTz);
+  }
+  if (ev.endTime) {
+    const [h, mn] = ev.endTime.split(":").map(Number);
+    eUtc = wallToUtc(ey, em, ed, h, mn, tzE);
+  } else {
+    const next = toISO(addDays(parseDay(ev.end), 1));
+    const [eyN, emN, edN] = next.split("-").map(Number);
+    eUtc = wallToUtc(eyN, emN, edN, 0, 0, dayTzMap[ev.end] || homeTz);
+  }
+  return { sUtc, eUtc };
+}
+
+// --- pack into sub-rows so overlapping events stack ---
+
+function packRowsByUtc(items) {
+  items.sort((a, b) => a.sUtc - b.sUtc);
+  const rows = [];
+  return items.map(it => {
+    let row = 0;
+    while (row < rows.length && rows[row] > it.sUtc + 1) row++;
+    rows[row] = it.eUtc;
+    return { ...it, row };
+  });
+}
+
+// --- DOM helpers ---
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+
+function makeTitle(ev) {
+  const startD = fmtShort(parseDay(ev.start));
+  const endD = fmtShort(parseDay(ev.end));
+  const range = startD === endD ? startD : `${startD} – ${endD}`;
+  let s = `${ev.title}\n${range}`;
+  if (ev.startTime || ev.endTime) {
+    const stz = ev.startTz ? ` ${tzShortName(ev.startTz, ev.start)}` : "";
+    const etz = ev.endTz   ? ` ${tzShortName(ev.endTz, ev.end)}`     : "";
+    s += `\n${ev.startTime || ""}${stz} → ${ev.endTime || ""}${etz}`;
+  }
+  if (ev.notes) s += `\n\n${ev.notes}`;
+  return s;
+}
+
+// --- Map a UTC time to a fractional day position in our timeline ---
+
+function toggleShrinkDay(ds) {
+  if (!state.shrunkDays) state.shrunkDays = [];
+  const i = state.shrunkDays.indexOf(ds);
+  if (i >= 0) state.shrunkDays.splice(i, 1);
+  else state.shrunkDays.push(ds);
+  save();
+  renderApp();
+}
+
+function fracToPx(frac, dayWidths, dayOffsets) {
+  if (frac <= 0) return 0;
+  const idx = Math.min(Math.floor(frac), dayWidths.length - 1);
+  const within = Math.max(0, Math.min(1, frac - idx));
+  return dayOffsets[idx] + dayWidths[idx] * within;
+}
+
+function utcToFrac(utc, dayUtcBounds) {
+  for (let i = 0; i < dayUtcBounds.length; i++) {
+    const d = dayUtcBounds[i];
+    if (utc <= d.endUtc) {
+      const dur = d.endUtc - d.startUtc;
+      const within = Math.max(0, Math.min(1, (utc - d.startUtc) / dur));
+      return i + within;
+    }
+  }
+  return dayUtcBounds.length;
+}
+
+// --- Render a timeline grid (axis + lanes) for a date range ---
+
+function renderTimeline(container, rangeStart, rangeEnd, opts) {
+  const { dayTzMap, homeTz, dayPx, compact, tzAware } = opts;
+  const events = opts.events || state.events;
+  const totalDays = dayDiff(rangeStart, rangeEnd) + 1;
+
+  const dayUtcBounds = [];
+  for (let i = 0; i < totalDays; i++) {
+    const ds = toISO(addDays(parseDay(rangeStart), i));
+    const tz = dayTzMap[ds] || homeTz;
+    const startUtc = dayStartUtcInTz(ds, tz);
+    const nextDs = toISO(addDays(parseDay(ds), 1));
+    const nextTz = dayTzMap[nextDs] || tz;
+    const endUtc = dayStartUtcInTz(nextDs, nextTz);
+    dayUtcBounds.push({ ds, tz, startUtc, endUtc });
+  }
+
+  const visible = events.filter(ev => !(ev.end < rangeStart || ev.start > rangeEnd));
+
+  // Compute density: a day is "active" if any non-location event touches it.
+  // Location bars (long destination stays) don't count toward density.
+  const dayActive = new Array(totalDays).fill(false);
+  for (const ev of visible) {
+    if (ev.lane === "location") continue;
+    for (let i = 0; i < totalDays; i++) {
+      const ds = dayUtcBounds[i].ds;
+      if (ev.start <= ds && ev.end >= ds) dayActive[i] = true;
+    }
+  }
+
+  // Per-day pixel widths (only when in fixed-day mode).
+  // Default: every day full-width. User can click to "shrink" a day; the
+  // freed space gets redistributed across the remaining full-width days
+  // so the timeline still fills the panel.
+  const SHRUNK_PX = 22;
+  const shrunkSet = new Set(state.shrunkDays || []);
+  let dayWidths = null;
+  if (dayPx) {
+    const shrunkCount = dayUtcBounds.filter(b => shrunkSet.has(b.ds)).length;
+    const nonShrunkCount = totalDays - shrunkCount;
+    const totalAvailable = totalDays * dayPx;
+    const fullPx = nonShrunkCount > 0
+      ? Math.max(60, Math.floor((totalAvailable - shrunkCount * SHRUNK_PX) / nonShrunkCount))
+      : dayPx;
+    dayWidths = dayUtcBounds.map(b => shrunkSet.has(b.ds) ? SHRUNK_PX : fullPx);
+  }
+  const dayOffsetsPx = [];
+  let cumPx = 0;
+  if (dayWidths) {
+    for (const w of dayWidths) { dayOffsetsPx.push(cumPx); cumPx += w; }
+  }
+  const totalPx = cumPx;
+
+  const grid = el("div", "timeline-grid" + (dayPx ? " fixed-day-width" : ""));
+  if (dayPx) grid.style.setProperty("--day-px", `${dayPx}px`);
+
+  // Row 1: lane spacer + axis
+  grid.appendChild(el("div", "lane-spacer"));
+
+  const axis = el("div", "axis" + (compact ? " compact" : ""));
+  const today = toISO(new Date());
+  for (let i = 0; i < totalDays; i++) {
+    const { ds, tz } = dayUtcBounds[i];
+    const day = parseDay(ds);
+    const cell = el("div", "day");
+    if (ds === today) cell.classList.add("today");
+    if (dayWidths) {
+      cell.style.flex = `0 0 ${dayWidths[i]}px`;
+      cell.style.cursor = "pointer";
+      const isShrunk = shrunkSet.has(ds);
+      if (isShrunk) {
+        cell.classList.add("compact-day");
+        cell.title = `${DOW[day.getDay()]} ${day.toLocaleDateString(undefined, { month: "short", day: "numeric" })} — click to expand`;
+      } else {
+        cell.title = "Click to shrink this day";
+      }
+      cell.addEventListener("click", () => toggleShrinkDay(ds));
+    }
+    cell.appendChild(el("span", "dow", DOW[day.getDay()]));
+    cell.appendChild(el("span", "num", compact
+      ? String(day.getDate())
+      : `${day.toLocaleDateString(undefined, { month: "short" })} ${day.getDate()}`));
+    if (tzAware) cell.appendChild(el("span", "tz", tzShortName(tz, ds)));
+    axis.appendChild(cell);
+  }
+  grid.appendChild(axis);
+
+  // Lanes
+  for (const lane of LANES) {
+    const laneEvents = visible.filter(ev => (ev.lane || "activities") === lane.key);
+    grid.appendChild(el("div", "lane-label", lane.label));
+
+    const laneArea = el("div", "lane-events");
+
+    if (laneEvents.length === 0) {
+      laneArea.classList.add("empty");
+      grid.appendChild(laneArea);
+      continue;
+    }
+
+    const items = laneEvents.map(ev => {
+      const { sUtc, eUtc } = eventBounds(ev, dayTzMap, homeTz);
+      return { ev, sUtc, eUtc };
+    });
+    const packed = packRowsByUtc(items);
+    const rowCount = Math.max(...packed.map(p => p.row + 1));
+    laneArea.style.setProperty("--rows", rowCount);
+
+    for (const { ev, sUtc, eUtc, row } of packed) {
+      let leftFrac = utcToFrac(sUtc, dayUtcBounds);
+      let rightFrac = utcToFrac(eUtc, dayUtcBounds);
+      leftFrac = Math.max(0, leftFrac);
+      rightFrac = Math.min(totalDays, rightFrac);
+      if (rightFrac <= leftFrac) continue;
+
+      const bar = el("div", `event ${ev.color || "indigo"}` + (ev._isOption ? " is-option" : ""));
+      if (dayWidths) {
+        const leftPx = fracToPx(leftFrac, dayWidths, dayOffsetsPx);
+        const rightPx = fracToPx(rightFrac, dayWidths, dayOffsetsPx);
+        bar.style.left = `${leftPx + 1}px`;
+        bar.style.width = `${Math.max(2, rightPx - leftPx - 2)}px`;
+      } else {
+        bar.style.left = `calc(${(leftFrac / totalDays) * 100}% + 1px)`;
+        bar.style.width = `calc(${((rightFrac - leftFrac) / totalDays) * 100}% - 2px)`;
+      }
+      bar.style.top = `calc(${row} * (var(--row-h) + 4px) + 4px)`;
+      bar.textContent = ev.title;
+      bar.title = makeTitle(ev);
+      bar.addEventListener("click", () => openEventDialog(ev.id, ev._optionId || null));
+      laneArea.appendChild(bar);
+    }
+
+    grid.appendChild(laneArea);
+  }
+
+  container.innerHTML = "";
+  container.appendChild(grid);
+}
+
+// --- breakdown segment sizing ---
+
+function chooseSegmentSize(totalDays) {
+  if (state.segmentSize !== "auto") return Number(state.segmentSize);
+  if (totalDays <= 7) return totalDays;
+  if (totalDays <= 60) return 7;
+  return 14;
+}
+
+// --- top-level render ---
+
+function render() {
+  document.getElementById("trip-name").value = state.name;
+  document.getElementById("trip-start").value = state.start || "";
+  document.getElementById("trip-end").value = state.end || "";
+  document.getElementById("segment-size").value = state.segmentSize;
+  document.getElementById("tz-aware").checked = !!state.tzAware;
+
+  const overview = document.getElementById("overview");
+  const breakdown = document.getElementById("breakdown");
+
+  if (!state.start || !state.end || state.end < state.start) {
+    overview.innerHTML = `<div class="empty-state">Set start and end dates to build your timeline.</div>`;
+    breakdown.innerHTML = "";
+    document.getElementById("trip-length").textContent = "";
+    return;
+  }
+
+  const totalDays = dayDiff(state.start, state.end) + 1;
+  document.getElementById("trip-length").textContent = `${totalDays} day${totalDays === 1 ? "" : "s"}`;
+
+  const homeTz = state.homeTz || "UTC";
+  const tzAware = !!state.tzAware;
+  const dayTzMap = computeDayTzMap(state.start, state.end, state.events, homeTz, tzAware);
+
+  // Overview: stretch to panel width (no fixed day width).
+  renderTimeline(overview, state.start, state.end, {
+    dayTzMap, homeTz, dayPx: null, compact: totalDays > 14, tzAware,
+  });
+
+  // Breakdown: fixed day width — short segments stay physically short.
+  breakdown.innerHTML = "";
+  const segSize = chooseSegmentSize(totalDays);
+
+  if (totalDays <= 7 || segSize >= totalDays) {
+    breakdown.innerHTML = `<div class="empty-state">Trip is short — overview shows the full breakdown.</div>`;
+    return;
+  }
+
+  // Pick a day width so the longest segment fills the breakdown panel,
+  // and shorter segments stay proportionally narrower.
+  const breakdownWidth = breakdown.clientWidth || 1200;
+  const laneLabelW = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--lane-label-w")) || 110;
+  const dayPx = Math.max(60, Math.floor((breakdownWidth - laneLabelW - 4) / segSize));
+
+  let cursor = parseDay(state.start);
+  let idx = 1;
+  while (toISO(cursor) <= state.end) {
+    const segStart = toISO(cursor);
+    const segEndDate = addDays(cursor, segSize - 1);
+    const segEnd = toISO(segEndDate) > state.end ? state.end : toISO(segEndDate);
+
+    const seg = el("div", "segment");
+    const head = el("div", "segment-head");
+    head.appendChild(el("span", "segment-title", `Segment ${idx}`));
+    head.appendChild(el("span", "segment-range",
+      `${fmtShort(parseDay(segStart))} – ${fmtShort(parseDay(segEnd))} · ${dayDiff(segStart, segEnd) + 1} days`));
+    seg.appendChild(head);
+
+    const tl = el("div", "timeline");
+    seg.appendChild(tl);
+    breakdown.appendChild(seg);
+
+    renderTimeline(tl, segStart, segEnd, {
+      dayTzMap, homeTz, dayPx, compact: false, tzAware,
+    });
+
+    cursor = addDays(cursor, segSize);
+    idx++;
+  }
+}
+
+// --- event dialog ---
+
+const dialog = document.getElementById("event-dialog");
+const form = document.getElementById("event-form");
+
+function findEvent(id) {
+  // Look in main first, then in any option's events.
+  const main = state.events.find(e => e.id === id);
+  if (main) return { ev: main, optionId: null };
+  for (const opt of state.options) {
+    const ev = opt.events.find(e => e.id === id);
+    if (ev) return { ev, optionId: opt.id };
+  }
+  return null;
+}
+
+function openEventDialog(id, optionId) {
+  form.reset();
+  const titleEl = document.getElementById("event-dialog-title");
+  const deleteBtn = document.getElementById("event-delete");
+
+  if (id) {
+    const found = findEvent(id);
+    if (!found) return;
+    const { ev, optionId: foundOpt } = found;
+    titleEl.textContent = foundOpt ? "Edit option event" : "Edit event";
+    form.elements.id.value = ev.id;
+    form.elements.optionId.value = foundOpt || "";
+    form.elements.title.value = ev.title;
+    form.elements.lane.value = ev.lane || "activities";
+    form.elements.start.value = ev.start;
+    form.elements.startTime.value = ev.startTime || "";
+    form.elements.end.value = ev.end;
+    form.elements.endTime.value = ev.endTime || "";
+    form.elements.color.value = ev.color || "indigo";
+    form.elements.notes.value = ev.notes || "";
+    deleteBtn.hidden = false;
+  } else {
+    const opt = optionId ? state.options.find(o => o.id === optionId) : null;
+    titleEl.textContent = opt ? `Add event to "${opt.name}"` : "Add event";
+    form.elements.id.value = "";
+    form.elements.optionId.value = optionId || "";
+    form.elements.lane.value = "flights";
+    const defaultStart = optionId ? (state.optionRangeStart || state.start) : state.start;
+    form.elements.start.value = defaultStart || "";
+    form.elements.end.value = defaultStart || "";
+    form.elements.color.value = optionId ? "indigo" : "emerald";
+    deleteBtn.hidden = true;
+  }
+  dialog.showModal();
+}
+
+form.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const data = Object.fromEntries(new FormData(form));
+  if (!data.title || !data.start || !data.end) return;
+  if (data.end < data.start) {
+    alert("End day must be on or after start day.");
+    return;
+  }
+
+  const updates = {
+    title: data.title,
+    lane: data.lane || "activities",
+    start: data.start,
+    end: data.end,
+    color: data.color,
+    notes: data.notes,
+  };
+  if (data.startTime) updates.startTime = data.startTime;
+  if (data.endTime) updates.endTime = data.endTime;
+
+  const optionId = data.optionId || null;
+  const targetList = optionId
+    ? (state.options.find(o => o.id === optionId)?.events || state.events)
+    : state.events;
+
+  if (data.id) {
+    const found = findEvent(data.id);
+    if (found) {
+      Object.assign(found.ev, updates);
+      if (!data.startTime) delete found.ev.startTime;
+      if (!data.endTime) delete found.ev.endTime;
+    }
+  } else {
+    targetList.push({ id: uid(), ...updates });
+  }
+  save();
+  dialog.close();
+  renderApp();
+});
+
+document.getElementById("event-cancel").addEventListener("click", () => dialog.close());
+document.getElementById("event-delete").addEventListener("click", () => {
+  const id = form.elements.id.value;
+  if (!id) return;
+  const found = findEvent(id);
+  if (found) {
+    if (found.optionId) {
+      const opt = state.options.find(o => o.id === found.optionId);
+      opt.events = opt.events.filter(e => e.id !== id);
+    } else {
+      state.events = state.events.filter(e => e.id !== id);
+    }
+  }
+  save();
+  dialog.close();
+  renderApp();
+});
+
+// --- top bar wiring ---
+
+document.getElementById("trip-name").addEventListener("input", (e) => {
+  state.name = e.target.value;
+  save();
+});
+document.getElementById("trip-start").addEventListener("change", (e) => {
+  state.start = e.target.value || null;
+  save();
+  renderApp();
+});
+document.getElementById("trip-end").addEventListener("change", (e) => {
+  state.end = e.target.value || null;
+  save();
+  renderApp();
+});
+document.getElementById("segment-size").addEventListener("change", (e) => {
+  state.segmentSize = e.target.value;
+  save();
+  renderApp();
+});
+document.getElementById("tz-aware").addEventListener("change", (e) => {
+  state.tzAware = e.target.checked;
+  save();
+  renderApp();
+});
+document.getElementById("add-event-btn").addEventListener("click", () => openEventDialog(null));
+document.getElementById("clear-btn").addEventListener("click", () => {
+  if (!confirm("Clear the trip and all events?")) return;
+  localStorage.removeItem(STORAGE_KEY);
+  for (const k of Object.keys(state)) delete state[k];
+  seed();
+  save();
+  renderApp();
+});
+
+// --- flight paste/parser ---
+
+const AIRPORT_TZ = {
+  YVR: "America/Vancouver",
+  SEA: "America/Los_Angeles",
+  LAX: "America/Los_Angeles",
+  JFK: "America/New_York",
+  ORD: "America/Chicago",
+  FRA: "Europe/Berlin",
+  LHR: "Europe/London",
+  CDG: "Europe/Paris",
+  AMS: "Europe/Amsterdam",
+  ZNZ: "Africa/Dar_es_Salaam",
+  ARK: "Africa/Dar_es_Salaam",
+  JRO: "Africa/Dar_es_Salaam",
+  DAR: "Africa/Dar_es_Salaam",
+  NBO: "Africa/Nairobi",
+  ADD: "Africa/Addis_Ababa",
+  CPT: "Africa/Johannesburg",
+  JNB: "Africa/Johannesburg",
+  SEZ: "Indian/Mahe",
+  MRU: "Indian/Mauritius",
+  CAI: "Africa/Cairo",
+  DXB: "Asia/Dubai",
+  DOH: "Asia/Qatar",
+  IST: "Europe/Istanbul",
+};
+
+function to24h(hhmm, ampm) {
+  let [h, m] = hhmm.split(":").map(Number);
+  if (ampm === "PM" && h < 12) h += 12;
+  if (ampm === "AM" && h === 12) h = 0;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+const MONTHS = { Jan:1, Feb:2, Mar:3, Apr:4, May:5, Jun:6, Jul:7, Aug:8, Sep:9, Oct:10, Nov:11, Dec:12 };
+
+// Parse a natural-language command like:
+//   "add hotel placeholder on july 7 for znz hotel"
+//   "add activity on jul 4 hiking"
+//   "add lodging on july 7 to july 8 at riu palace"
+//   "add location on jul 5 cape town"
+function parseCommand(text, defaultYear) {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  if (!/^add\b/i.test(trimmed)) return null;
+
+  const m = trimmed.match(/^add\s+(?:(hotel|hotels|lodging|flight|flights|activity|activities|location|where)\s+)?(?:placeholder\s+)?(?:on\s+)?(.+)$/i);
+  if (!m) return null;
+
+  const laneWord = (m[1] || "").toLowerCase();
+  const rest = m[2];
+
+  const laneMap = {
+    hotel: "lodging", hotels: "lodging", lodging: "lodging",
+    flight: "flights", flights: "flights",
+    activity: "activities", activities: "activities",
+    location: "location", where: "location",
+  };
+  const lane = laneMap[laneWord] || "activities";
+
+  const range = parseRangeFromText(rest, defaultYear);
+  if (!range) return null;
+
+  let title = range.remainder.replace(/^(?:for|at)\s+/i, "").trim();
+  if (!title) title = `${lane} placeholder`;
+
+  const colorMap = {
+    lodging: "amber",
+    flights: "indigo",
+    location: "violet",
+    activities: "emerald",
+  };
+
+  return [{
+    id: uid(),
+    title,
+    lane,
+    color: colorMap[lane] || "emerald",
+    start: range.start,
+    end: range.end || range.start,
+    notes: "Added via paste command",
+  }];
+}
+
+function parseRangeFromText(text, defaultYear) {
+  const start = consumeDate(text, defaultYear);
+  if (!start) return null;
+  let remainder = text.slice(start.consumed).trim();
+  let end = null;
+  const toMatch = remainder.match(/^(?:to|through|\-|until)\s+/i);
+  if (toMatch) {
+    const after = remainder.slice(toMatch[0].length);
+    const endParse = consumeDate(after, defaultYear);
+    if (endParse) {
+      end = endParse.iso;
+      remainder = after.slice(endParse.consumed).trim();
+    }
+  }
+  return { start: start.iso, end, remainder };
+}
+
+function consumeDate(text, defaultYear) {
+  const monthMap = {
+    jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
+    january: 1, february: 2, march: 3, april: 4, june: 6, july: 7, august: 8, september: 9, october: 10, november: 11, december: 12,
+  };
+  // "Month Day[, Year]"
+  let m = text.match(/^([A-Za-z]+)\.?\s+(\d{1,2})(?:,?\s+(\d{4}))?\b/);
+  if (m && monthMap[m[1].toLowerCase()]) {
+    const mo = monthMap[m[1].toLowerCase()];
+    const d = +m[2];
+    const y = m[3] ? +m[3] : defaultYear;
+    return { iso: `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`, consumed: m[0].length };
+  }
+  // "YYYY-MM-DD"
+  m = text.match(/^(\d{4})-(\d{2})-(\d{2})\b/);
+  if (m) return { iso: `${m[1]}-${m[2]}-${m[3]}`, consumed: m[0].length };
+  // "M/D[/YY[YY]]"
+  m = text.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/);
+  if (m) {
+    const mo = +m[1];
+    const d = +m[2];
+    let y = defaultYear;
+    if (m[3]) {
+      y = +m[3];
+      if (y < 100) y += 2000;
+    }
+    return { iso: `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`, consumed: m[0].length };
+  }
+  return null;
+}
+
+function parseFlights(text, defaultYear) {
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const events = [];
+
+  const dateRx       = /^(?:Sun|Mon|Tue|Wed|Thu|Fri|Sat),?\s+([A-Za-z]{3})\s+(\d{1,2})(?:,\s*(\d{4}))?$/;
+  const stopRx       = /^(\d{1,2}:\d{2})\s*(AM|PM)(?:\+(\d))?\s*([A-Za-z'.\-,&/ ]+?)\s*\((\w{3})\)\s*$/;
+  const travelRx     = /^Travel time:\s*(.+?)(?:Overnight)?\s*$/i;
+  const layoverRx    = /^(\d+\s*hr(?:\s*\d+\s*min)?)\s*layover\s*([A-Za-z' ]+?)\s*\((\w{3})\)(?:Overnight layover)?\s*$/i;
+  const flightEndRx  = /[A-Z]{2,3}\s?\d{1,4}$/;
+  const flightFullRx = /^(.+?)(Business|Economy|First|Premium Economy)\s*(?:\([^)]+\)\s*)?(.+?)([A-Z]{2,3})\s?(\d{1,4})$/;
+
+  let curDate = null;
+  let depStop = null, depOff = 0;
+  let arrStop = null, arrOff = 0;
+  let travelTime = null;
+  let pendingLayover = null;
+  let flightLines = [];
+
+  function pushFlight(flightNum, notes) {
+    if (!depStop || !arrStop || !curDate) return;
+    const startDate = depOff > 0 ? toISO(addDays(parseDay(curDate), depOff)) : curDate;
+    const endDate   = arrOff > 0 ? toISO(addDays(parseDay(curDate), arrOff)) : curDate;
+
+    if (pendingLayover) {
+      let prev = null;
+      for (let i = events.length - 1; i >= 0; i--) {
+        if (events[i].lane === "flights" && !events[i].title.endsWith("layover")) {
+          prev = events[i];
+          break;
+        }
+      }
+      if (prev) {
+        events.push({
+          id: uid(),
+          title: `${pendingLayover.code} layover`,
+          lane: "flights",
+          color: "grey",
+          start: prev.end, startTime: prev.endTime, startTz: prev.endTz,
+          end:   startDate, endTime:   depStop.time, endTz:   AIRPORT_TZ[depStop.code] || "UTC",
+          notes: `${pendingLayover.duration} layover in ${pendingLayover.city}`,
+        });
+      }
+      pendingLayover = null;
+    }
+
+    events.push({
+      id: uid(),
+      title: `${flightNum} ${depStop.code} → ${arrStop.code}`,
+      lane: "flights",
+      color: "indigo",
+      start: startDate, startTime: depStop.time, startTz: AIRPORT_TZ[depStop.code] || "UTC",
+      end:   endDate,   endTime:   arrStop.time, endTz:   AIRPORT_TZ[arrStop.code] || "UTC",
+      notes,
+    });
+
+    depStop = arrStop = null;
+    depOff = arrOff = 0;
+    travelTime = null;
+    flightLines = [];
+  }
+
+  function tryParseFlightInfo() {
+    const concat = flightLines.join("");
+    const m = concat.match(flightFullRx);
+    if (!m) return false;
+    const airline  = m[1].trim();
+    const cabin    = m[2].trim();
+    const aircraft = m[3].trim();
+    const flightNo = `${m[4]} ${m[5]}`;
+    const notes = `${airline} · ${cabin} · ${aircraft}${travelTime ? " · " + travelTime : ""}`;
+    pushFlight(flightNo, notes);
+    return true;
+  }
+
+  for (const line of lines) {
+    let m;
+    if ((m = line.match(dateRx))) {
+      const month = MONTHS[m[1]];
+      if (!month) continue;
+      const day = +m[2];
+      const year = m[3] ? +m[3] : defaultYear;
+      curDate = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+      depStop = arrStop = null;
+      depOff = arrOff = 0;
+      flightLines = [];
+      continue;
+    }
+    if ((m = line.match(layoverRx))) {
+      pendingLayover = { duration: m[1].trim(), city: m[2].trim(), code: m[3] };
+      continue;
+    }
+    if ((m = line.match(stopRx))) {
+      const off = m[3] ? +m[3] : 0;
+      const stop = { time: to24h(m[1], m[2]), name: m[4].trim(), code: m[5] };
+      if (!depStop) {
+        depStop = stop; depOff = off;
+      } else if (!arrStop) {
+        arrStop = stop; arrOff = off;
+      } else {
+        // Already have dep+arr but no flight info found — abandon and start new flight
+        depStop = stop; depOff = off;
+        arrStop = null; arrOff = 0;
+        flightLines = [];
+      }
+      continue;
+    }
+    if ((m = line.match(travelRx))) {
+      travelTime = m[1].trim();
+      continue;
+    }
+    // Otherwise: accumulate as flight info if we have dep + arr
+    if (depStop && arrStop) {
+      flightLines.push(line);
+      if (flightEndRx.test(line)) {
+        tryParseFlightInfo();
+      }
+    }
+  }
+
+  return events;
+}
+
+// --- airport display names (for derived locations) ---
+
+const AIRPORT_NAMES = {
+  YVR: "Vancouver",
+  SEA: "Seattle",
+  FRA: "Frankfurt",
+  ZNZ: "Zanzibar",
+  ARK: "Arusha",
+  JRO: "Kilimanjaro",
+  DAR: "Dar es Salaam",
+  NBO: "Nairobi",
+  ADD: "Addis Ababa",
+  CPT: "Cape Town",
+  JNB: "Johannesburg",
+  SEZ: "Seychelles",
+  MRU: "Mauritius",
+  LAX: "Los Angeles",
+  JFK: "New York",
+};
+
+function arrCodeFromTitle(title) {
+  const m = title.match(/→\s*(\w{3})\s*$/);
+  return m ? m[1] : null;
+}
+function depCodeFromTitle(title) {
+  const m = title.match(/(\w{3})\s*→/);
+  return m ? m[1] : null;
+}
+
+// Given an option's flight events, derive "Where" stays for any
+// round-trip pattern (arrive at X, later depart X without a layover bridging).
+function fmtDuration(ms) {
+  if (ms <= 0) return "0m";
+  const totalMin = Math.round(ms / 60000);
+  const d = Math.floor(totalMin / (60 * 24));
+  const h = Math.floor((totalMin % (60 * 24)) / 60);
+  const m = totalMin % 60;
+  const parts = [];
+  if (d) parts.push(`${d}d`);
+  if (h || d) parts.push(`${h}h`);
+  if (!d && m) parts.push(`${m}m`);
+  return parts.join(" ") || "0m";
+}
+
+// Hours-only formatter: "12h" or "12h 30m" (no days rollover).
+function fmtHours(ms) {
+  if (ms <= 0) return "0h";
+  const totalMin = Math.round(ms / 60000);
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
+}
+
+function summarizeOption(opt) {
+  const homeTz = state.homeTz || "UTC";
+  const flights = opt.events.filter(e =>
+    e.lane === "flights" && !e.title.endsWith("layover"));
+  const layovers = opt.events.filter(e =>
+    e.lane === "flights" && e.title.endsWith("layover"));
+
+  const sumMs = arr => arr.reduce((s, ev) => {
+    const { sUtc, eUtc } = eventBounds(ev, {}, homeTz);
+    return s + Math.max(0, eUtc - sUtc);
+  }, 0);
+
+  const flightMs = sumMs(flights);
+  const layoverMs = sumMs(layovers);
+
+  // Derived stays + any user-added location events in the option.
+  const derived = deriveLocationsForOption(opt);
+  const userLocations = opt.events.filter(e => e.lane === "location");
+  const allStays = [...userLocations, ...derived];
+  const stays = allStays.map(ev => {
+    const { sUtc, eUtc } = eventBounds(ev, {}, homeTz);
+    return { name: ev.title, ms: Math.max(0, eUtc - sUtc) };
+  });
+
+  return { flightMs, layoverMs, stays };
+}
+
+function deriveLocationsForOption(opt) {
+  const homeTz = state.homeTz || "UTC";
+  const flights = opt.events.filter(e =>
+    e.lane === "flights" && !e.title.endsWith("layover"));
+  const layovers = opt.events.filter(e =>
+    e.lane === "flights" && e.title.endsWith("layover"));
+
+  const flightItems = flights.map(ev => {
+    const { sUtc, eUtc } = eventBounds(ev, {}, homeTz);
+    return { ev, sUtc, eUtc };
+  }).sort((a, b) => a.sUtc - b.sUtc);
+
+  const layoverItems = layovers.map(lv => {
+    const { sUtc, eUtc } = eventBounds(lv, {}, homeTz);
+    return { lv, sUtc, eUtc };
+  });
+
+  const out = [];
+  for (let i = 0; i < flightItems.length - 1; i++) {
+    const cur = flightItems[i];
+    const next = flightItems[i + 1];
+    const arrCode = arrCodeFromTitle(cur.ev.title);
+    const depCode = depCodeFromTitle(next.ev.title);
+    if (!arrCode || !depCode || arrCode !== depCode) continue;
+
+    // Skip if a layover already bridges this gap at the same airport.
+    const bridged = layoverItems.some(lb =>
+      lb.sUtc >= cur.eUtc - 60_000 &&
+      lb.eUtc <= next.sUtc + 60_000 &&
+      lb.lv.title.includes(arrCode)
+    );
+    if (bridged) continue;
+
+    out.push({
+      id: `derived-${cur.ev.id}-${next.ev.id}`,
+      title: AIRPORT_NAMES[arrCode] || arrCode,
+      lane: "location",
+      color: "teal",
+      start:     cur.ev.end,     startTime: cur.ev.endTime,   startTz: cur.ev.endTz,
+      end:       next.ev.start,  endTime:   next.ev.startTime, endTz:   next.ev.startTz,
+      notes: "Auto-derived from option flights",
+    });
+  }
+  return out;
+}
+
+// --- options view ---
+
+function defaultOptionRange() {
+  if (!state.start || !state.end) return null;
+  const totalDays = dayDiff(state.start, state.end) + 1;
+  const segSize = chooseSegmentSize(totalDays);
+  const seg3StartIdx = 2 * segSize;
+  if (seg3StartIdx >= totalDays) return { start: state.start, end: state.end };
+  const segStart = toISO(addDays(parseDay(state.start), seg3StartIdx));
+  return { start: segStart, end: state.end };
+}
+
+function getOptionRange() {
+  const def = defaultOptionRange();
+  if (!def) return null;
+  return {
+    start: state.optionRangeStart || def.start,
+    end:   state.optionRangeEnd   || def.end,
+  };
+}
+
+function renderOptions() {
+  const range = getOptionRange();
+  const list = document.getElementById("options-list");
+  list.innerHTML = "";
+
+  // Sync the range inputs.
+  if (range) {
+    document.getElementById("option-range-start").value = range.start;
+    document.getElementById("option-range-end").value = range.end;
+  }
+
+  // Refresh the paste target dropdown.
+  const target = document.getElementById("paste-target");
+  if (target) {
+    const prev = target.value;
+    target.innerHTML = "";
+    target.appendChild(new Option("My itinerary", "__main__"));
+    for (const opt of state.options) {
+      target.appendChild(new Option(opt.name, opt.id));
+    }
+    target.value = state.options.find(o => o.id === prev) ? prev : "__main__";
+  }
+
+  if (!range) {
+    list.appendChild(el("div", "empty-state", "Set your trip dates first."));
+    return;
+  }
+
+  if (state.options.length === 0) {
+    list.appendChild(el("div", "empty-state",
+      `No options yet. Click "+ New option" to stage an alternative for ${fmtShort(parseDay(range.start))} – ${fmtShort(parseDay(range.end))}.`));
+    return;
+  }
+
+  const homeTz = state.homeTz || "UTC";
+  const tzAware = !!state.tzAware;
+  const dayTzMap = computeDayTzMap(state.start, state.end, state.events, homeTz, tzAware);
+
+  for (const opt of state.options) {
+    const card = el("div", "option-card");
+
+    // Head: name input + price + actions
+    const head = el("div", "option-head");
+    const nameInput = el("input", "option-name");
+    nameInput.type = "text";
+    nameInput.value = opt.name;
+    nameInput.placeholder = "Option name";
+    nameInput.addEventListener("input", () => { opt.name = nameInput.value; save(); });
+    head.appendChild(nameInput);
+
+    const priceWrap = el("div", "option-price-wrap");
+    priceWrap.appendChild(el("span", "option-price-prefix", "$"));
+    const priceInput = el("input", "option-price");
+    priceInput.type = "text";
+    priceInput.inputMode = "decimal";
+    priceInput.placeholder = "0";
+    priceInput.value = opt.price != null ? String(opt.price) : "";
+    priceInput.addEventListener("input", () => {
+      const v = priceInput.value.replace(/[^0-9.]/g, "");
+      opt.price = v === "" ? null : Number(v);
+      save();
+    });
+    priceWrap.appendChild(priceInput);
+    head.appendChild(priceWrap);
+
+    const actions = el("div", "option-actions");
+    const addBtn = el("button", null, "+ Add event");
+    addBtn.type = "button";
+    addBtn.addEventListener("click", () => openEventDialog(null, opt.id));
+    actions.appendChild(addBtn);
+
+    const applied = isOptionApplied(opt.id);
+    const applyBtn = el("button", applied ? "danger" : null,
+      applied ? "Remove from itinerary" : "Apply to itinerary");
+    applyBtn.type = "button";
+    applyBtn.addEventListener("click", () => {
+      if (applied) removeAppliedOption(opt.id);
+      else applyOption(opt.id);
+    });
+    actions.appendChild(applyBtn);
+
+    const delBtn = el("button", "ghost", "Delete");
+    delBtn.type = "button";
+    delBtn.addEventListener("click", () => {
+      if (!confirm(`Delete option "${opt.name}"?`)) return;
+      state.options = state.options.filter(o => o.id !== opt.id);
+      save();
+      renderApp();
+    });
+    actions.appendChild(delBtn);
+
+    head.appendChild(actions);
+    card.appendChild(head);
+
+    // Combined timeline: confirmed main events (in range) + option's events
+    // (dashed) + auto-derived "Where" stays from the option's flight chain.
+    const mainInRange = state.events.filter(ev => !(ev.end < range.start || ev.start > range.end));
+    const derivedLocations = deriveLocationsForOption(opt);
+    const optEvents = [...opt.events, ...derivedLocations]
+      .map(ev => ({ ...ev, _isOption: true, _optionId: opt.id }));
+    const combined = [...mainInRange, ...optEvents];
+
+    const tlEl = el("div", "timeline");
+    card.appendChild(tlEl);
+
+    const breakdownPanel = document.getElementById("tab-options").querySelector(".panel");
+    const containerWidth = (breakdownPanel?.clientWidth || 1000) - 32; // panel padding
+    const laneLabelW = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--lane-label-w")) || 110;
+    const totalDaysInRange = dayDiff(range.start, range.end) + 1;
+    const dayPx = Math.max(60, Math.floor((containerWidth - laneLabelW - 30) / totalDaysInRange));
+
+    renderTimeline(tlEl, range.start, range.end, {
+      dayTzMap, homeTz, dayPx, compact: false, tzAware, events: combined,
+    });
+
+    // Stats row: time at each place + flying + layovers.
+    const summary = summarizeOption(opt);
+    const stats = el("div", "option-stats");
+    if (summary.stays.length === 0 && summary.flightMs === 0 && summary.layoverMs === 0) {
+      stats.appendChild(el("span", "stat muted", "Add flights to see time breakdown"));
+    } else {
+      // Group stays by location name (user might have multiple stops at same place).
+      const grouped = new Map();
+      for (const s of summary.stays) {
+        grouped.set(s.name, (grouped.get(s.name) || 0) + s.ms);
+      }
+      for (const [name, ms] of grouped) {
+        const chip = el("span", "stat stat-place");
+        chip.appendChild(el("span", "stat-label", name));
+        chip.appendChild(el("span", "stat-value", fmtDuration(ms)));
+        stats.appendChild(chip);
+      }
+      const flying = el("span", "stat stat-flying");
+      flying.appendChild(el("span", "stat-label", "Flying"));
+      flying.appendChild(el("span", "stat-value", fmtHours(summary.flightMs)));
+      stats.appendChild(flying);
+
+      const lay = el("span", "stat stat-layover");
+      lay.appendChild(el("span", "stat-label", "Layovers"));
+      lay.appendChild(el("span", "stat-value", fmtHours(summary.layoverMs)));
+      stats.appendChild(lay);
+
+      const total = summary.flightMs + summary.layoverMs;
+      const transit = el("span", "stat stat-transit");
+      transit.appendChild(el("span", "stat-label", "Transit total"));
+      transit.appendChild(el("span", "stat-value", fmtHours(total)));
+      stats.appendChild(transit);
+    }
+    card.appendChild(stats);
+
+    list.appendChild(card);
+  }
+
+  renderComparison();
+}
+
+function escHtml(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
+
+function renderComparison() {
+  const container = document.getElementById("options-comparison");
+  if (!container) return;
+  if (state.options.length < 2) { container.innerHTML = ""; return; }
+
+  const rows = state.options.map(opt => {
+    const summary = summarizeOption(opt);
+    const grouped = new Map();
+    for (const s of summary.stays) grouped.set(s.name, (grouped.get(s.name) || 0) + s.ms);
+    const stays = [...grouped.entries()]
+      .map(([name, ms]) => `${name}: ${fmtDuration(ms)}`)
+      .join(", ") || "—";
+    const transit = summary.flightMs + summary.layoverMs;
+    const stayMs = [...grouped.values()].reduce((a, b) => a + b, 0);
+    return {
+      opt,
+      stays,
+      flying: summary.flightMs,
+      layovers: summary.layoverMs,
+      transit,
+      stayMs,
+      price: opt.price || 0,
+    };
+  });
+
+  // Highlight bests in each numeric column.
+  const minBy = key => Math.min(...rows.map(r => r[key] || Infinity));
+  const maxBy = key => Math.max(...rows.map(r => r[key]));
+  const bestStay   = maxBy("stayMs");
+  const bestFly    = minBy("flying");
+  const bestLay    = minBy("layovers");
+  const bestTrans  = minBy("transit");
+  const bestPrice  = Math.min(...rows.filter(r => r.price > 0).map(r => r.price));
+
+  const html = `
+    <h3>Comparison</h3>
+    <table class="comparison-table">
+      <thead>
+        <tr>
+          <th>Option</th>
+          <th>Destination time</th>
+          <th>Flying</th>
+          <th>Layovers</th>
+          <th>Transit total</th>
+          <th>Price</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map(r => `
+          <tr>
+            <td class="opt-name">${escHtml(r.opt.name)}</td>
+            <td class="${r.stayMs === bestStay ? "best" : ""}">${escHtml(r.stays)}</td>
+            <td class="num ${r.flying === bestFly ? "best" : ""}">${fmtHours(r.flying)}</td>
+            <td class="num ${r.layovers === bestLay ? "best" : ""}">${fmtHours(r.layovers)}</td>
+            <td class="num ${r.transit === bestTrans ? "best" : ""}">${fmtHours(r.transit)}</td>
+            <td class="num price ${r.price === bestPrice && r.price > 0 ? "best" : ""}">${r.price > 0 ? "$" + r.price.toLocaleString() : "—"}</td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+  `;
+  container.innerHTML = html;
+}
+
+function isOptionApplied(optId) {
+  return state.events.some(e => e._appliedFrom === optId);
+}
+
+function applyOption(optId) {
+  const opt = state.options.find(o => o.id === optId);
+  if (!opt) return;
+  if (opt.events.length === 0) {
+    alert("This option has no events yet.");
+    return;
+  }
+  const derived = deriveLocationsForOption(opt);
+  const total = opt.events.length + derived.length;
+  if (!confirm(`Add ${total} event(s) from "${opt.name}" to your itinerary?\n(${derived.length} auto-derived location event${derived.length === 1 ? "" : "s"} included.)`)) return;
+  for (const ev of [...opt.events, ...derived]) {
+    const copy = { ...ev, id: uid(), _appliedFrom: optId };
+    delete copy._isOption;
+    delete copy._optionId;
+    state.events.push(copy);
+  }
+  save();
+  renderApp();
+}
+
+function removeAppliedOption(optId) {
+  const opt = state.options.find(o => o.id === optId);
+  const name = opt ? opt.name : "this option";
+  const count = state.events.filter(e => e._appliedFrom === optId).length;
+  if (!confirm(`Remove ${count} event(s) added from "${name}" from your itinerary?`)) return;
+  state.events = state.events.filter(e => e._appliedFrom !== optId);
+  save();
+  renderApp();
+}
+
+// --- view dispatcher / tabs ---
+
+function renderApp() {
+  // Always sync the topbar fields, regardless of which view is active.
+  document.getElementById("trip-name").value = state.name || "";
+  document.getElementById("trip-start").value = state.start || "";
+  document.getElementById("trip-end").value = state.end || "";
+  document.getElementById("tz-aware").checked = !!state.tzAware;
+
+  // Tab buttons & panel visibility
+  document.querySelectorAll(".tab-btn").forEach(b => {
+    b.classList.toggle("active", b.dataset.tab === state.activeView);
+  });
+  document.getElementById("tab-main").hidden = state.activeView !== "main";
+  document.getElementById("tab-options").hidden = state.activeView !== "options";
+
+  if (state.activeView === "main") render();
+  else renderOptions();
+}
+
+document.querySelectorAll(".tab-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    state.activeView = btn.dataset.tab;
+    save();
+    renderApp();
+  });
+});
+
+document.getElementById("add-option-btn").addEventListener("click", () => {
+  const range = getOptionRange();
+  if (!range) return;
+  state.options.push({
+    id: uid(),
+    name: `Option ${state.options.length + 1}`,
+    events: [],
+  });
+  save();
+  renderApp();
+});
+
+document.getElementById("paste-parse").addEventListener("click", () => {
+  const text = document.getElementById("paste-input").value;
+  const status = document.getElementById("paste-status");
+  if (!text.trim()) {
+    status.textContent = "Paste some flight data first.";
+    status.className = "paste-status error";
+    return;
+  }
+  const defaultYear = state.start
+    ? Number(state.start.split("-")[0])
+    : new Date().getFullYear();
+
+  // Try natural-language command first ("add hotel on july 7 for znz hotel")
+  let events = parseCommand(text, defaultYear);
+  if (!events) events = parseFlights(text, defaultYear);
+
+  if (!events || events.length === 0) {
+    status.textContent = "Could not detect anything to add. Try a flight paste or a command like 'add hotel on jul 7 for znz hotel'.";
+    status.className = "paste-status error";
+    return;
+  }
+  const targetId = document.getElementById("paste-target").value;
+  if (targetId === "__main__") {
+    state.events.push(...events);
+  } else {
+    const opt = state.options.find(o => o.id === targetId);
+    if (opt) opt.events.push(...events);
+  }
+  save();
+  status.textContent = `Added ${events.length} event(s).`;
+  status.className = "paste-status success";
+  document.getElementById("paste-input").value = "";
+  renderApp();
+});
+
+document.getElementById("paste-clear").addEventListener("click", () => {
+  document.getElementById("paste-input").value = "";
+  document.getElementById("paste-status").textContent = "";
+});
+
+document.getElementById("option-range-start").addEventListener("change", (e) => {
+  state.optionRangeStart = e.target.value || null;
+  save();
+  renderOptions();
+});
+document.getElementById("option-range-end").addEventListener("change", (e) => {
+  state.optionRangeEnd = e.target.value || null;
+  save();
+  renderOptions();
+});
+
+// --- boot ---
+
+async function bootstrap() {
+  const params = new URLSearchParams(window.location.search);
+  const importPath = params.get("import");
+  if (importPath) {
+    try {
+      const res = await fetch(importPath);
+      if (!res.ok) throw new Error(`fetch failed ${res.status}`);
+      const text = await res.text();
+      JSON.parse(text);
+      localStorage.setItem(STORAGE_KEY, text);
+      window.location.replace(window.location.pathname);
+      return;
+    } catch (e) {
+      console.error("Import failed:", e);
+      alert(`Import failed: ${e.message}`);
+    }
+  }
+  // If the page has an embedded snapshot and we have no saved state yet,
+  // pre-populate localStorage from it on first visit.
+  if (typeof EMBEDDED_STATE !== "undefined" && !localStorage.getItem(STORAGE_KEY)) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(EMBEDDED_STATE));
+    } catch (e) {
+      console.error("Embedded state load failed:", e);
+    }
+  }
+  load();
+  if (!state.options) state.options = [];
+  if (!state.activeView) state.activeView = "main";
+  if (!state.shrunkDays) state.shrunkDays = [];
+  // Migrate stale field from earlier version.
+  delete state.expandedDays;
+  renderApp();
+}
+
+bootstrap();
