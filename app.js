@@ -1023,6 +1023,77 @@ function parseReservation(text, defaultYear) {
   }];
 }
 
+// Loose natural-language parser for inputs like "Orlando from Dec 19-26",
+// "Hawaii Mar 1 to Mar 8", or "concert on jul 4". Handles cases where the
+// stricter parseCommand doesn't fire because there's no "add" prefix.
+function parseLooseEvent(text, defaultYear) {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  // Bail if it looks like a multi-line paste (flight blocks, reservations, etc.)
+  if (trimmed.split(/\r?\n/).filter(l => l.trim()).length > 2) return null;
+
+  // Try "<title> from DATE to DATE" / "<title> DATE - DATE" / "<title> on DATE".
+  const monthWord = "(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*";
+  const dateBit = `(?:${monthWord}\\.?\\s+\\d{1,2}(?:,?\\s+\\d{4})?|\\d{4}-\\d{2}-\\d{2}|\\d{1,2}\\/\\d{1,2}(?:\\/\\d{2,4})?)`;
+  // Second slot also accepts a bare day number ("Dec 19-26" → end is "26").
+  const dateBitOrDay = `(?:${dateBit}|\\d{1,2})`;
+  const rangeRx = new RegExp(
+    `^(.+?)\\s+(?:from\\s+)?(${dateBit})(?:\\s*(?:to|through|until|\\-|\\u2013)\\s*(${dateBitOrDay}))?\\s*$`,
+    "i"
+  );
+  const onRx = new RegExp(
+    `^(.+?)\\s+on\\s+(${dateBit})\\s*$`,
+    "i"
+  );
+  // Try onRx first so "concert on jul 4" doesn't leave "on" stuck on the title.
+  let m = trimmed.match(onRx) || trimmed.match(rangeRx);
+  if (!m) return null;
+  let title = m[1].trim();
+  const startStr = m[2];
+  const endStr = m[3] || null;
+
+  function parseDateBit(s) {
+    // Reuse consumeDate by passing prefix-trimmed input.
+    const r = consumeDate(s.trim(), defaultYear);
+    return r ? r.iso : null;
+  }
+  const start = parseDateBit(startStr);
+  if (!start) return null;
+  let end = endStr ? parseDateBit(endStr) : null;
+  // "Dec 19-26" — second date might be just a day number; reuse the first
+  // month/year if so.
+  if (endStr && !end) {
+    const dayOnly = endStr.match(/^\s*(\d{1,2})\s*$/);
+    if (dayOnly) {
+      const [y, mo] = start.split("-");
+      end = `${y}-${mo}-${String(+dayOnly[1]).padStart(2,"0")}`;
+    }
+  }
+  if (!end) end = start;
+
+  // Lane heuristic: a lodging/flight/activity keyword wins; otherwise a
+  // multi-day stretch defaults to a location, single day to an activity.
+  let lane = "location";
+  if (/\b(hotel|hotels|lodging|inn|resort|villa|airbnb)\b/i.test(title)) lane = "lodging";
+  else if (/\b(flight|flights)\b/i.test(title)) lane = "flights";
+  else if (/\b(activity|activities|tour|excursion|concert|show|game|dinner)\b/i.test(title)) lane = "activities";
+  else if (start === end) lane = "activities";
+
+  // Strip a leading "for"/"at"/"in"/"to" if present.
+  title = title.replace(/^(?:for|at|in|to)\s+/i, "").trim();
+
+  const colorMap = { lodging: "amber", flights: "indigo", location: "violet", activities: "emerald" };
+  return [{
+    id: uid(),
+    title,
+    lane,
+    color: colorMap[lane] || "emerald",
+    start,
+    end,
+    notes: "Added via paste",
+  }];
+}
+
 // Parse Delta-style itinerary blocks where each flight reads:
 //   Sat, 19DEC      DEPART      ARRIVE
 //   DELTA 358
@@ -1782,6 +1853,9 @@ function wirePasteBlock({ inputId, parseId, clearId, statusId, targetId }) {
     if (!events) events = parseReservation(text, defaultYear);
     if (!events) events = parseDeltaItinerary(text, defaultYear);
     if (!events) events = parseFlights(text, defaultYear);
+    // parseLooseEvent is intentionally last so it doesn't steal multi-line
+    // flight/reservation pastes.
+    if (!events) events = parseLooseEvent(text, defaultYear);
 
     if (!events || events.length === 0) {
       status.textContent = "Could not detect anything to add. Try a flight paste or a command like 'add hotel on jul 7 for znz hotel'.";
