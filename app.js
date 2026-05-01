@@ -513,7 +513,19 @@ function renderTimeline(container, rangeStart, rangeEnd, opts) {
     appendNightShades(laneArea, totalDays, dayWidths, dayOffsetsPx, shrunkSet, dayUtcBounds);
 
     for (const { ev, sUtc, eUtc, row } of packed) {
-      let { leftFrac, rightFrac } = eventLocalFracs(ev, rangeStart);
+      // tzAware: each day cell is its own local TZ — position events by
+      // their declared local clock time within those cells (so a flight
+      // at 16:15 PDT on day 17 lands at the 16:15 mark, not pushed by the
+      // following day's TZ shift).
+      // Non-tzAware: every day is in home TZ — convert UTC to home-TZ
+      // fraction so a 11:00 Berlin arrival lands at 02:00 in the home grid.
+      let leftFrac, rightFrac;
+      if (tzAware) {
+        ({ leftFrac, rightFrac } = eventLocalFracs(ev, rangeStart));
+      } else {
+        leftFrac = utcToFrac(sUtc, dayUtcBounds);
+        rightFrac = utcToFrac(eUtc, dayUtcBounds);
+      }
       leftFrac = Math.max(0, leftFrac);
       rightFrac = Math.min(totalDays, rightFrac);
       if (rightFrac <= leftFrac) continue;
