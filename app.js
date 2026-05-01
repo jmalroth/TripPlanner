@@ -384,6 +384,22 @@ function utcToFrac(utc, dayUtcBounds) {
   return dayUtcBounds.length;
 }
 
+// Position an event on the timeline using its declared local clock times
+// within each day cell — bypasses UTC/TZ math so flights show up at the
+// times shown on their boarding pass regardless of TZ shifts mid-trip.
+function eventLocalFracs(ev, rangeStart) {
+  const startDayIdx = dayDiff(rangeStart, ev.start);
+  const endDayIdx = dayDiff(rangeStart, ev.end);
+  function timeFrac(t) {
+    if (!t) return 0;
+    const [h, m] = t.split(":").map(Number);
+    return (h + (m || 0) / 60) / 24;
+  }
+  const leftFrac = startDayIdx + (ev.startTime ? timeFrac(ev.startTime) : 0);
+  const rightFrac = ev.endTime ? endDayIdx + timeFrac(ev.endTime) : endDayIdx + 1;
+  return { leftFrac, rightFrac };
+}
+
 // --- Render a timeline grid (axis + lanes) for a date range ---
 
 function renderTimeline(container, rangeStart, rangeEnd, opts) {
@@ -497,8 +513,7 @@ function renderTimeline(container, rangeStart, rangeEnd, opts) {
     appendNightShades(laneArea, totalDays, dayWidths, dayOffsetsPx, shrunkSet, dayUtcBounds);
 
     for (const { ev, sUtc, eUtc, row } of packed) {
-      let leftFrac = utcToFrac(sUtc, dayUtcBounds);
-      let rightFrac = utcToFrac(eUtc, dayUtcBounds);
+      let { leftFrac, rightFrac } = eventLocalFracs(ev, rangeStart);
       leftFrac = Math.max(0, leftFrac);
       rightFrac = Math.min(totalDays, rightFrac);
       if (rightFrac <= leftFrac) continue;
