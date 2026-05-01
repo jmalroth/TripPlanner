@@ -615,6 +615,42 @@ function appendNightShades(laneArea, totalDays, dayWidths, dayOffsetsPx, shrunkS
   laneArea.appendChild(layer);
 }
 
+// Render the "still need to book" panel between overview and breakdown.
+// Lists every event flagged tentative, sorted by start. Hidden when none.
+function renderTodoList() {
+  const panel = document.getElementById("todo-panel");
+  const list = document.getElementById("todo-list");
+  if (!panel || !list) return;
+  const tentative = state.events.filter(e => e.tentative)
+    .sort((a, b) => (a.start || "").localeCompare(b.start || ""));
+  if (tentative.length === 0) {
+    panel.hidden = true;
+    list.innerHTML = "";
+    return;
+  }
+  panel.hidden = false;
+  list.innerHTML = "";
+  for (const ev of tentative) {
+    const li = document.createElement("li");
+    const swatch = document.createElement("span");
+    swatch.className = "todo-swatch";
+    const colorVal = ev.color || "indigo";
+    if (colorVal.startsWith("#")) swatch.style.background = colorVal;
+    else swatch.style.backgroundColor = `var(--${colorVal})`;
+    const title = document.createElement("span");
+    title.className = "todo-title";
+    title.textContent = ev.title;
+    const meta = document.createElement("span");
+    meta.className = "todo-meta";
+    meta.textContent = ev.start === ev.end ? ev.start : `${ev.start} → ${ev.end}`;
+    li.appendChild(swatch);
+    li.appendChild(title);
+    li.appendChild(meta);
+    li.addEventListener("click", () => openEventDialog(ev.id, null));
+    list.appendChild(li);
+  }
+}
+
 // --- breakdown segment sizing ---
 
 function chooseSegmentSize(totalDays) {
@@ -654,6 +690,8 @@ function render() {
   renderTimeline(overview, state.start, state.end, {
     dayTzMap, homeTz, dayPx: null, compact: totalDays > 14, tzAware,
   });
+
+  renderTodoList();
 
   // Breakdown: fixed day width — short segments stay physically short.
   breakdown.innerHTML = "";
