@@ -1605,6 +1605,24 @@ function wirePasteBlock({ inputId, parseId, clearId, statusId, targetId }) {
       : "__main__";
     if (target === "__main__") {
       state.events.push(...events);
+      // Expand the trip's date range so newly added events are visible.
+      // Important when a fresh trip has no dates yet, or a reservation
+      // falls outside the manually-entered range.
+      let dateChanged = false;
+      for (const e of events) {
+        if (e.start && (!state.start || e.start < state.start)) {
+          state.start = e.start;
+          dateChanged = true;
+        }
+        if (e.end && (!state.end || e.end > state.end)) {
+          state.end = e.end;
+          dateChanged = true;
+        }
+      }
+      if (dateChanged) {
+        document.getElementById("trip-start").value = state.start || "";
+        document.getElementById("trip-end").value = state.end || "";
+      }
     } else {
       const opt = state.options.find(o => o.id === target);
       if (opt) opt.events.push(...events);
