@@ -1023,6 +1023,53 @@ function parseReservation(text, defaultYear) {
   }];
 }
 
+// Parse cruise-line confirmations (Disney, Royal Caribbean, etc.) where the
+// dates are labeled "Departure Date" / "Return Date" or "Embarkation Date" /
+// "Disembarkation Date" rather than the hotel "Arrive/Depart" labels.
+function parseCruise(text, defaultYear) {
+  if (!/\bcruise\b/i.test(text)) return null;
+  const monthMap = {
+    jan:1, feb:2, mar:3, apr:4, may:5, jun:6, jul:7, aug:8, sep:9, oct:10, nov:11, dec:12,
+    january:1, february:2, march:3, april:4, june:6, july:7, august:8, september:9, october:10, november:11, december:12,
+  };
+  const dowDateRx = /(?:(?:sun|mon|tue|wed|thu|fri|sat)[a-z]*[,\s]+)?([a-z]+)\.?\s+(\d{1,2})(?:,?\s+(\d{4}))?/i;
+
+  function dateAfter(labels) {
+    const lower = text.toLowerCase();
+    for (const label of labels) {
+      const idx = lower.indexOf(label.toLowerCase());
+      if (idx < 0) continue;
+      const after = text.slice(idx + label.length);
+      const m = after.match(dowDateRx);
+      if (!m) continue;
+      const mo = monthMap[m[1].toLowerCase()];
+      if (!mo) continue;
+      const y = m[3] ? +m[3] : defaultYear;
+      return `${y}-${String(mo).padStart(2,"0")}-${String(+m[2]).padStart(2,"0")}`;
+    }
+    return null;
+  }
+
+  const start = dateAfter(["Departure Date", "Embarkation Date", "Sail Date", "Sailing Date"]);
+  const end   = dateAfter(["Return Date", "Disembarkation Date", "Arrival Date"]);
+  if (!start || !end) return null;
+
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  let title = lines.find(l => /^\d+\s+night\s+cruise/i.test(l));
+  if (!title) title = lines.find(l => /cruise/i.test(l) && !/:/.test(l) && l.length < 80);
+  if (!title) title = "Cruise";
+
+  return [{
+    id: uid(),
+    title,
+    lane: "lodging",
+    color: "amber",
+    start,
+    end,
+    notes: "Added via cruise paste",
+  }];
+}
+
 // Loose natural-language parser for inputs like "Orlando from Dec 19-26",
 // "Hawaii Mar 1 to Mar 8", or "concert on jul 4". Handles cases where the
 // stricter parseCommand doesn't fire because there's no "add" prefix.
@@ -1850,6 +1897,7 @@ function wirePasteBlock({ inputId, parseId, clearId, statusId, targetId }) {
       : new Date().getFullYear();
 
     let events = parseCommand(text, defaultYear);
+    if (!events) events = parseCruise(text, defaultYear);
     if (!events) events = parseReservation(text, defaultYear);
     if (!events) events = parseDeltaItinerary(text, defaultYear);
     if (!events) events = parseFlights(text, defaultYear);
