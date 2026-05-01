@@ -1461,44 +1461,67 @@ document.getElementById("add-option-btn").addEventListener("click", () => {
   renderApp();
 });
 
-document.getElementById("paste-parse").addEventListener("click", () => {
-  const text = document.getElementById("paste-input").value;
-  const status = document.getElementById("paste-status");
-  if (!text.trim()) {
-    status.textContent = "Paste some flight data first.";
-    status.className = "paste-status error";
-    return;
-  }
-  const defaultYear = state.start
-    ? Number(state.start.split("-")[0])
-    : new Date().getFullYear();
+function wirePasteBlock({ inputId, parseId, clearId, statusId, targetId }) {
+  const parseBtn = document.getElementById(parseId);
+  if (!parseBtn) return;
+  parseBtn.addEventListener("click", () => {
+    const input = document.getElementById(inputId);
+    const status = document.getElementById(statusId);
+    const text = input.value;
+    if (!text.trim()) {
+      status.textContent = "Paste some flight data first.";
+      status.className = "paste-status error";
+      return;
+    }
+    const defaultYear = state.start
+      ? Number(state.start.split("-")[0])
+      : new Date().getFullYear();
 
-  // Try natural-language command first ("add hotel on july 7 for znz hotel")
-  let events = parseCommand(text, defaultYear);
-  if (!events) events = parseFlights(text, defaultYear);
+    let events = parseCommand(text, defaultYear);
+    if (!events) events = parseFlights(text, defaultYear);
 
-  if (!events || events.length === 0) {
-    status.textContent = "Could not detect anything to add. Try a flight paste or a command like 'add hotel on jul 7 for znz hotel'.";
-    status.className = "paste-status error";
-    return;
-  }
-  const targetId = document.getElementById("paste-target").value;
-  if (targetId === "__main__") {
-    state.events.push(...events);
-  } else {
-    const opt = state.options.find(o => o.id === targetId);
-    if (opt) opt.events.push(...events);
-  }
-  save();
-  status.textContent = `Added ${events.length} event(s).`;
-  status.className = "paste-status success";
-  document.getElementById("paste-input").value = "";
-  renderApp();
+    if (!events || events.length === 0) {
+      status.textContent = "Could not detect anything to add. Try a flight paste or a command like 'add hotel on jul 7 for znz hotel'.";
+      status.className = "paste-status error";
+      return;
+    }
+    // targetId may be a static "__main__" (main tab) or a select element id
+    // (options tab — user picks which option to add to).
+    const target = targetId
+      ? document.getElementById(targetId)?.value || "__main__"
+      : "__main__";
+    if (target === "__main__") {
+      state.events.push(...events);
+    } else {
+      const opt = state.options.find(o => o.id === target);
+      if (opt) opt.events.push(...events);
+    }
+    save();
+    status.textContent = `Added ${events.length} event(s).`;
+    status.className = "paste-status success";
+    input.value = "";
+    renderApp();
+  });
+
+  document.getElementById(clearId).addEventListener("click", () => {
+    document.getElementById(inputId).value = "";
+    document.getElementById(statusId).textContent = "";
+  });
+}
+
+wirePasteBlock({
+  inputId: "paste-input",
+  parseId: "paste-parse",
+  clearId: "paste-clear",
+  statusId: "paste-status",
+  targetId: "paste-target",
 });
-
-document.getElementById("paste-clear").addEventListener("click", () => {
-  document.getElementById("paste-input").value = "";
-  document.getElementById("paste-status").textContent = "";
+wirePasteBlock({
+  inputId: "paste-input-main",
+  parseId: "paste-parse-main",
+  clearId: "paste-clear-main",
+  statusId: "paste-status-main",
+  targetId: null,
 });
 
 document.getElementById("option-range-start").addEventListener("change", (e) => {

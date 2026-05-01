@@ -35,6 +35,24 @@
     <main>
       <section class="panel">
         <div class="panel-head">
+          <h2>Add to itinerary</h2>
+          <span class="hint">Paste a flight, or type a command like "add hotel on jul 7 for znz hotel"</span>
+        </div>
+        <details class="paste-block">
+          <summary>Paste flight data or type a command</summary>
+          <div class="paste-content">
+            <textarea id="paste-input-main" rows="6" placeholder="Paste a flight (Google Flights / Kayak / etc.) — or type a command:&#10;  add hotel on jul 7 for znz hotel&#10;  add activity on july 4 hiking&#10;  add lodging on jul 7 to jul 8 at riu palace"></textarea>
+            <div class="paste-actions">
+              <button id="paste-parse-main" type="button">Parse &amp; add</button>
+              <button id="paste-clear-main" type="button" class="ghost">Clear</button>
+            </div>
+            <div id="paste-status-main" class="paste-status"></div>
+          </div>
+        </details>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
           <h2>Whole trip</h2>
           <span class="hint">Overview — entire trip on one row</span>
         </div>
