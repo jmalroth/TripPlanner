@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Trips</title>
+<link rel="stylesheet" href="styles.css" />
+<style>
+  .trips-wrap { max-width: 880px; margin: 0 auto; padding: 24px 20px; }
+  .trips-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 18px; }
+  .trips-head h1 { margin: 0; font-size: 22px; }
+  .trips-section h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 22px 0 8px; }
+  .trip-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+  .trip-card { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  .trip-card a.trip-name { font-weight: 600; color: var(--text); text-decoration: none; }
+  .trip-card a.trip-name:hover { text-decoration: underline; }
+  .trip-meta-line { color: var(--muted); font-size: 13px; }
+  .trip-actions { display: flex; gap: 6px; }
+  .trip-actions button { background: transparent; border: 1px solid var(--line); color: var(--muted); padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+  .trip-actions button:hover { color: var(--text); }
+  .trip-actions button.danger:hover { color: #b12a48; border-color: #b12a48; }
+  .empty { color: var(--muted); font-style: italic; padding: 8px 0; }
+  .new-trip-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; padding: 14px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 12px; }
+  .new-trip-form label { display: flex; flex-direction: column; font-size: 12px; color: var(--muted); gap: 4px; }
+  .new-trip-form input { padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; font-size: 14px; }
+  .new-trip-form button { padding: 7px 14px; background: var(--accent); color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
+</style>
+</head>
+<body>
+  <div class="trips-wrap">
+    <div class="trips-head">
+      <h1>Trips</h1>
+    </div>
+
+    <form id="new-trip-form" class="new-trip-form">
+      <label>Name<input id="nt-name" type="text" placeholder="e.g. Iceland 2027" required /></label>
+      <label>Start<input id="nt-start" type="date" /></label>
+      <label>End<input id="nt-end" type="date" /></label>
+      <button type="submit">+ New trip</button>
+    </form>
+
+    <section class="trips-section">
+      <h2>Upcoming &amp; current</h2>
+      <ul id="upcoming-list" class="trip-list"></ul>
+    </section>
+
+    <section class="trips-section">
+      <h2>Past</h2>
+      <ul id="past-list" class="trip-list"></ul>
+    </section>
+
+    <section class="trips-section">
+      <h2>Archived snapshots</h2>
+      <ul class="trip-list">
+        <li class="trip-card">
+          <div>
+            <a class="trip-name" href="africa.html">Africa 2026</a>
+            <div class="trip-meta-line">Standalone HTML snapshot</div>
+          </div>
+        </li>
+      </ul>
+    </section>
+  </div>
+
+<script>
+const REGISTRY_KEY = "trip-builder-trips";
+const TRIP_KEY_PREFIX = "trip-builder-trip-";
+const LEGACY_KEY = "trip-builder-v7";
+
+function readRegistry() {
+  try { return JSON.parse(localStorage.getItem(REGISTRY_KEY) || "[]"); }
+  catch (e) { return []; }
+}
+function writeRegistry(list) {
+  localStorage.setItem(REGISTRY_KEY, JSON.stringify(list));
+}
+function newTripId() {
+  return "t" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
+// Migrate any legacy single-trip blob on first visit so it shows up in the list.
+(function migrateLegacy() {
+  const legacy = localStorage.getItem(LEGACY_KEY);
+  if (!legacy) return;
+  try {
+    const parsed = JSON.parse(legacy);
+    const id = newTripId();
+    localStorage.setItem(TRIP_KEY_PREFIX + id, legacy);
+    const list = readRegistry();
+    list.push({
+      id,
+      name: parsed.name || "Untitled trip",
+      start: parsed.start || null,
+      end: parsed.end || null,
+    });
+    writeRegistry(list);
+    localStorage.removeItem(LEGACY_KEY);
+  } catch (e) { /* ignore */ }
+})();
+
+function fmtRange(t) {
+  if (!t.start && !t.end) return "No dates set";
+  if (t.start && t.end) return `${t.start} → ${t.end}`;
+  return t.start || t.end;
+}
+
+function todayStr() {
+  const d = new Date();
+  return d.toISOString().slice(0, 10);
+}
+
+function isPast(t) {
+  return t.end && t.end < todayStr();
+}
+
+function render() {
+  const list = readRegistry();
+  const upcoming = list.filter(t => !isPast(t));
+  const past = list.filter(t => isPast(t));
+
+  const ul1 = document.getElementById("upcoming-list");
+  const ul2 = document.getElementById("past-list");
+  ul1.innerHTML = "";
+  ul2.innerHTML = "";
+
+  function row(t) {
+    const li = document.createElement("li");
+    li.className = "trip-card";
+    li.innerHTML = `
+      <div>
+        <a class="trip-name" href="index.html?trip=${encodeURIComponent(t.id)}"></a>
+        <div class="trip-meta-line"></div>
+      </div>
+      <div class="trip-actions">
+        <button data-action="rename">Rename</button>
+        <button data-action="delete" class="danger">Delete</button>
+      </div>
+    `;
+    li.querySelector(".trip-name").textContent = t.name || "Untitled trip";
+    li.querySelector(".trip-meta-line").textContent = fmtRange(t);
+    li.querySelector('[data-action="rename"]').addEventListener("click", () => {
+      const next = prompt("Rename trip:", t.name || "");
+      if (next == null) return;
+      const all = readRegistry();
+      const i = all.findIndex(x => x.id === t.id);
+      if (i < 0) return;
+      all[i].name = next.trim() || all[i].name;
+      writeRegistry(all);
+      // Keep per-trip blob in sync.
+      try {
+        const raw = localStorage.getItem(TRIP_KEY_PREFIX + t.id);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          parsed.name = all[i].name;
+          localStorage.setItem(TRIP_KEY_PREFIX + t.id, JSON.stringify(parsed));
+        }
+      } catch (e) { /* ignore */ }
+      render();
+    });
+    li.querySelector('[data-action="delete"]').addEventListener("click", () => {
+      if (!confirm(`Delete "${t.name}"? This can't be undone.`)) return;
+      const all = readRegistry().filter(x => x.id !== t.id);
+      writeRegistry(all);
+      localStorage.removeItem(TRIP_KEY_PREFIX + t.id);
+      render();
+    });
+    return li;
+  }
+
+  if (upcoming.length === 0) ul1.innerHTML = '<li class="empty">No upcoming trips yet — create one above.</li>';
+  else upcoming.forEach(t => ul1.appendChild(row(t)));
+
+  if (past.length === 0) ul2.innerHTML = '<li class="empty">No past trips.</li>';
+  else past.forEach(t => ul2.appendChild(row(t)));
+}
+
+document.getElementById("new-trip-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const name = document.getElementById("nt-name").value.trim();
+  const start = document.getElementById("nt-start").value || null;
+  const end = document.getElementById("nt-end").value || null;
+  if (!name) return;
+  const id = newTripId();
+  const list = readRegistry();
+  list.push({ id, name, start, end });
+  writeRegistry(list);
+  // Seed the per-trip blob so the editor finds something to load.
+  localStorage.setItem(TRIP_KEY_PREFIX + id, JSON.stringify({
+    name, start, end,
+    tzAware: true,
+    events: [],
+    options: [],
+    activeView: "main",
+    shrunkDays: [],
+  }));
+  window.location.href = `index.html?trip=${encodeURIComponent(id)}`;
+});
+
+render();
+</script>
+</body>
+</html>

@@ -1,6 +1,58 @@
 // Trip Timeline Builder — vanilla JS, persisted to localStorage.
+//
+// Storage layout (multi-trip):
+//   trip-builder-trips           : JSON array of {id, name, start, end} (registry)
+//   trip-builder-trip-<id>       : JSON of full trip state for that id
+//   trip-builder-v7              : legacy single-trip blob (auto-migrated on first run)
 
-const STORAGE_KEY = "trip-builder-v7";
+const LEGACY_KEY = "trip-builder-v7";
+const REGISTRY_KEY = "trip-builder-trips";
+const TRIP_KEY_PREFIX = "trip-builder-trip-";
+
+let CURRENT_TRIP_ID = null;
+function STORAGE_KEY_FOR(id) { return TRIP_KEY_PREFIX + id; }
+function STORAGE_KEY() { return STORAGE_KEY_FOR(CURRENT_TRIP_ID); }
+
+function readRegistry() {
+  try {
+    const raw = localStorage.getItem(REGISTRY_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch (e) {
+    return [];
+  }
+}
+function writeRegistry(list) {
+  localStorage.setItem(REGISTRY_KEY, JSON.stringify(list));
+}
+function upsertRegistry(entry) {
+  const list = readRegistry();
+  const i = list.findIndex(t => t.id === entry.id);
+  if (i >= 0) list[i] = { ...list[i], ...entry };
+  else list.push(entry);
+  writeRegistry(list);
+}
+function newTripId() {
+  return "t" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+function migrateLegacy() {
+  const legacy = localStorage.getItem(LEGACY_KEY);
+  if (!legacy) return null;
+  try {
+    const parsed = JSON.parse(legacy);
+    const id = newTripId();
+    localStorage.setItem(STORAGE_KEY_FOR(id), legacy);
+    upsertRegistry({
+      id,
+      name: parsed.name || "Untitled trip",
+      start: parsed.start || null,
+      end: parsed.end || null,
+    });
+    localStorage.removeItem(LEGACY_KEY);
+    return id;
+  } catch (e) {
+    return null;
+  }
+}
 
 const LANES = [
   { key: "location",   label: "Where" },
@@ -95,7 +147,7 @@ function tzShortName(tz, dateStr) {
 
 function load() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(STORAGE_KEY());
     if (!raw) return seed();
     Object.assign(state, JSON.parse(raw));
   } catch (e) {
@@ -104,7 +156,13 @@ function load() {
 }
 
 function save() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  localStorage.setItem(STORAGE_KEY(), JSON.stringify(state));
+  upsertRegistry({
+    id: CURRENT_TRIP_ID,
+    name: state.name || "Untitled trip",
+    start: state.start || null,
+    end: state.end || null,
+  });
 }
 
 function seed() {
@@ -695,7 +753,7 @@ document.getElementById("tz-aware").addEventListener("change", (e) => {
 document.getElementById("add-event-btn").addEventListener("click", () => openEventDialog(null));
 document.getElementById("clear-btn").addEventListener("click", () => {
   if (!confirm("Clear the trip and all events?")) return;
-  localStorage.removeItem(STORAGE_KEY);
+  localStorage.removeItem(STORAGE_KEY());
   for (const k of Object.keys(state)) delete state[k];
   seed();
   save();
@@ -1458,6 +1516,34 @@ document.getElementById("option-range-end").addEventListener("change", (e) => {
 
 async function bootstrap() {
   const params = new URLSearchParams(window.location.search);
+
+  // One-time migration of any legacy single-trip blob into the registry.
+  const migratedId = migrateLegacy();
+
+  let tripId = params.get("trip");
+
+  // If no ?trip=, try to recover: explicit migrated id, then first registry
+  // entry, otherwise punt to the trips landing page.
+  if (!tripId) {
+    if (migratedId) {
+      tripId = migratedId;
+    } else {
+      const list = readRegistry();
+      if (list.length > 0) {
+        tripId = list[0].id;
+      } else {
+        window.location.replace("trips.html");
+        return;
+      }
+    }
+    const url = new URL(window.location.href);
+    url.searchParams.set("trip", tripId);
+    window.location.replace(url.toString());
+    return;
+  }
+
+  CURRENT_TRIP_ID = tripId;
+
   const importPath = params.get("import");
   if (importPath) {
     try {
@@ -1465,8 +1551,10 @@ async function bootstrap() {
       if (!res.ok) throw new Error(`fetch failed ${res.status}`);
       const text = await res.text();
       JSON.parse(text);
-      localStorage.setItem(STORAGE_KEY, text);
-      window.location.replace(window.location.pathname);
+      localStorage.setItem(STORAGE_KEY(), text);
+      const url = new URL(window.location.href);
+      url.searchParams.delete("import");
+      window.location.replace(url.toString());
       return;
     } catch (e) {
       console.error("Import failed:", e);
@@ -1475,9 +1563,9 @@ async function bootstrap() {
   }
   // If the page has an embedded snapshot and we have no saved state yet,
   // pre-populate localStorage from it on first visit.
-  if (typeof EMBEDDED_STATE !== "undefined" && !localStorage.getItem(STORAGE_KEY)) {
+  if (typeof EMBEDDED_STATE !== "undefined" && !localStorage.getItem(STORAGE_KEY())) {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(EMBEDDED_STATE));
+      localStorage.setItem(STORAGE_KEY(), JSON.stringify(EMBEDDED_STATE));
     } catch (e) {
       console.error("Embedded state load failed:", e);
     }
