@@ -823,40 +823,182 @@ function addPricingLineItem() {
   renderPricing();
 }
 
-// Render the "still need to book" panel between overview and breakdown.
-// Lists every event flagged tentative, sorted by start. Hidden when none.
+// "still need to book" panel. Lists tentative events; lets you bundle a
+// few together with a label and book them as a group.
+const todoSelection = new Set();
+
+function ensureTodoBundles() {
+  if (!Array.isArray(state.todoBundles)) state.todoBundles = [];
+}
+function findBundleForEvent(eventId) {
+  ensureTodoBundles();
+  return state.todoBundles.find(b => b.eventIds.includes(eventId));
+}
+
+function todoSwatch(ev) {
+  const swatch = document.createElement("span");
+  swatch.className = "todo-swatch";
+  const colorVal = ev.color || "indigo";
+  if (colorVal.startsWith("#")) swatch.style.background = colorVal;
+  else swatch.style.backgroundColor = `var(--${colorVal})`;
+  return swatch;
+}
+
 function renderTodoList() {
   const panel = document.getElementById("todo-panel");
   const list = document.getElementById("todo-list");
   if (!panel || !list) return;
+  ensureTodoBundles();
+
   const tentative = state.events.filter(e => e.tentative)
     .sort((a, b) => (a.start || "").localeCompare(b.start || ""));
   if (tentative.length === 0) {
     panel.hidden = true;
     list.innerHTML = "";
+    todoSelection.clear();
+    state.todoBundles = state.todoBundles.filter(b =>
+      b.eventIds.some(id => state.events.find(e => e.id === id)?.tentative));
     return;
   }
   panel.hidden = false;
   list.innerHTML = "";
-  for (const ev of tentative) {
+
+  // Drop bundles that no longer have any tentative members.
+  const tentIds = new Set(tentative.map(e => e.id));
+  state.todoBundles = state.todoBundles
+    .map(b => ({ ...b, eventIds: b.eventIds.filter(id => tentIds.has(id)) }))
+    .filter(b => b.eventIds.length > 0);
+
+  // Render bundles first.
+  for (const bundle of state.todoBundles) {
     const li = document.createElement("li");
-    const swatch = document.createElement("span");
-    swatch.className = "todo-swatch";
-    const colorVal = ev.color || "indigo";
-    if (colorVal.startsWith("#")) swatch.style.background = colorVal;
-    else swatch.style.backgroundColor = `var(--${colorVal})`;
+    li.className = "bundle";
+    const head = document.createElement("div");
+    head.className = "bundle-head";
+    const label = document.createElement("span");
+    label.className = "bundle-label";
+    label.textContent = bundle.label || "(unlabeled bundle)";
+    const meta = document.createElement("span");
+    meta.className = "bundle-meta";
+    meta.textContent = `${bundle.eventIds.length} items`;
+    const actions = document.createElement("span");
+    actions.className = "bundle-actions";
+    const bookBtn = document.createElement("button");
+    bookBtn.textContent = "Mark booked";
+    bookBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      bundle.eventIds.forEach(id => {
+        const ev = state.events.find(x => x.id === id);
+        if (ev) ev.tentative = false;
+      });
+      state.todoBundles = state.todoBundles.filter(b => b.id !== bundle.id);
+      save();
+      renderApp();
+    });
+    const renameBtn = document.createElement("button");
+    renameBtn.textContent = "Rename";
+    renameBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const next = prompt("Rename bundle:", bundle.label || "");
+      if (next == null) return;
+      bundle.label = next.trim() || bundle.label;
+      save();
+      renderTodoList();
+    });
+    const unBtn = document.createElement("button");
+    unBtn.textContent = "Unbundle";
+    unBtn.className = "danger";
+    unBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      state.todoBundles = state.todoBundles.filter(b => b.id !== bundle.id);
+      save();
+      renderTodoList();
+    });
+    actions.appendChild(bookBtn);
+    actions.appendChild(renameBtn);
+    actions.appendChild(unBtn);
+    head.appendChild(label);
+    head.appendChild(meta);
+    head.appendChild(actions);
+
+    const children = document.createElement("div");
+    children.className = "bundle-children";
+    for (const id of bundle.eventIds) {
+      const ev = state.events.find(x => x.id === id);
+      if (!ev) continue;
+      const child = document.createElement("div");
+      child.className = "bundle-child";
+      child.appendChild(todoSwatch(ev));
+      const t = document.createElement("span");
+      t.textContent = ev.title;
+      child.appendChild(t);
+      const date = document.createElement("span");
+      date.textContent = ev.start === ev.end ? ev.start : `${ev.start} → ${ev.end}`;
+      child.appendChild(date);
+      child.addEventListener("click", () => openEventDialog(ev.id, null));
+      child.style.cursor = "pointer";
+      children.appendChild(child);
+    }
+    li.appendChild(head);
+    li.appendChild(children);
+    list.appendChild(li);
+  }
+
+  // Then unbundled tentative events with checkboxes for selection.
+  for (const ev of tentative) {
+    if (findBundleForEvent(ev.id)) continue;
+    const li = document.createElement("li");
+    const check = document.createElement("input");
+    check.type = "checkbox";
+    check.className = "todo-check";
+    check.checked = todoSelection.has(ev.id);
+    check.addEventListener("click", (e) => e.stopPropagation());
+    check.addEventListener("change", () => {
+      if (check.checked) todoSelection.add(ev.id);
+      else todoSelection.delete(ev.id);
+      updateTodoBundleBar();
+    });
     const title = document.createElement("span");
     title.className = "todo-title";
     title.textContent = ev.title;
     const meta = document.createElement("span");
     meta.className = "todo-meta";
     meta.textContent = ev.start === ev.end ? ev.start : `${ev.start} → ${ev.end}`;
-    li.appendChild(swatch);
+    li.appendChild(check);
+    li.appendChild(todoSwatch(ev));
     li.appendChild(title);
     li.appendChild(meta);
-    li.addEventListener("click", () => openEventDialog(ev.id, null));
+    li.addEventListener("click", (e) => {
+      if (e.target === check) return;
+      openEventDialog(ev.id, null);
+    });
     list.appendChild(li);
   }
+  updateTodoBundleBar();
+}
+
+function updateTodoBundleBar() {
+  const bar = document.getElementById("todo-bundle-bar");
+  if (!bar) return;
+  bar.hidden = todoSelection.size < 2;
+}
+
+function addTodoBundle() {
+  ensureTodoBundles();
+  if (todoSelection.size < 2) {
+    alert("Select at least 2 items to bundle.");
+    return;
+  }
+  const labelInput = document.getElementById("todo-bundle-label");
+  state.todoBundles.push({
+    id: "tb" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+    eventIds: [...todoSelection],
+    label: labelInput.value.trim() || null,
+  });
+  todoSelection.clear();
+  labelInput.value = "";
+  save();
+  renderTodoList();
 }
 
 // --- breakdown segment sizing ---
@@ -2215,6 +2357,12 @@ document.querySelectorAll(".tab-btn").forEach(btn => {
     save();
     renderApp();
   });
+});
+
+document.getElementById("todo-bundle-add")?.addEventListener("click", addTodoBundle);
+document.getElementById("todo-bundle-clear")?.addEventListener("click", () => {
+  todoSelection.clear();
+  renderTodoList();
 });
 
 document.getElementById("pricing-add-btn")?.addEventListener("click", addPricingLineItem);
