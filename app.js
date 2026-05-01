@@ -615,6 +615,214 @@ function appendNightShades(laneArea, totalDays, dayWidths, dayOffsetsPx, shrunkS
   laneArea.appendChild(layer);
 }
 
+// --- Pricing tab ---
+//
+// state.lineItems: [{ id, eventIds: [...], cost: number, label?: string, tentative: bool }]
+// Each event can belong to at most one line item. Pricing tab lets you click
+// event pills to bundle them into a single-cost line item.
+
+const pricingSelection = new Set();
+const LANE_LABEL = { location: "Where", lodging: "Lodging", flights: "Flights", rental: "Rental car", activities: "Activities" };
+const LANE_ORDER = ["flights", "lodging", "rental", "activities", "location"];
+
+function fmtMoney(n) {
+  if (typeof n !== "number" || isNaN(n)) return "$0.00";
+  return "$" + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+
+function ensureLineItems() {
+  if (!Array.isArray(state.lineItems)) state.lineItems = [];
+}
+
+function eventToLineItem(eventId) {
+  ensureLineItems();
+  return state.lineItems.find(li => li.eventIds.includes(eventId));
+}
+
+function renderPricing() {
+  ensureLineItems();
+  renderPricingPills();
+  renderPricingLineItems();
+  renderPricingSummary();
+}
+
+function renderPricingPills() {
+  const container = document.getElementById("pricing-pills");
+  if (!container) return;
+  container.innerHTML = "";
+  const events = [...state.events].sort((a, b) => (a.start || "").localeCompare(b.start || ""));
+  if (events.length === 0) {
+    container.innerHTML = `<div class="empty-state" style="padding:0">No events yet — add some on the My itinerary tab.</div>`;
+    return;
+  }
+  for (const ev of events) {
+    const inLI = eventToLineItem(ev.id);
+    const pill = document.createElement("span");
+    pill.className = "pricing-pill";
+    if (inLI) pill.classList.add("in-line-item");
+    if (pricingSelection.has(ev.id)) pill.classList.add("selected");
+    const colorVal = ev.color || "indigo";
+    const dot = document.createElement("span");
+    dot.className = "pill-dot";
+    if (colorVal.startsWith("#")) dot.style.background = colorVal;
+    else dot.style.backgroundColor = `var(--${colorVal})`;
+    pill.appendChild(dot);
+    pill.appendChild(document.createTextNode(ev.title));
+    if (!inLI) {
+      pill.addEventListener("click", () => {
+        if (pricingSelection.has(ev.id)) pricingSelection.delete(ev.id);
+        else pricingSelection.add(ev.id);
+        renderPricingPills();
+        updatePricingSelectionSummary();
+      });
+    } else {
+      pill.title = `Already in: ${inLI.label || "(unlabeled)"} — ${fmtMoney(inLI.cost)}`;
+    }
+    container.appendChild(pill);
+  }
+  updatePricingSelectionSummary();
+}
+
+function updatePricingSelectionSummary() {
+  const sum = document.getElementById("pricing-selection-summary");
+  if (!sum) return;
+  sum.textContent = pricingSelection.size === 0 ? "" : `${pricingSelection.size} selected`;
+}
+
+function renderPricingLineItems() {
+  const container = document.getElementById("pricing-line-items");
+  if (!container) return;
+  container.innerHTML = "";
+  ensureLineItems();
+  // Group line items by the dominant lane of their events.
+  const byLane = {};
+  for (const li of state.lineItems) {
+    const lanes = li.eventIds.map(id => state.events.find(e => e.id === id)?.lane).filter(Boolean);
+    const counts = {};
+    lanes.forEach(l => { counts[l] = (counts[l] || 0) + 1; });
+    const lane = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0] || "activities";
+    (byLane[lane] ||= []).push(li);
+  }
+  for (const lane of LANE_ORDER) {
+    const items = byLane[lane];
+    if (!items || items.length === 0) continue;
+    const group = document.createElement("div");
+    group.className = "pricing-group";
+    const subtotal = items.reduce((s, li) => s + (Number(li.cost) || 0), 0);
+    const h = document.createElement("h3");
+    h.innerHTML = `<span></span><span class="group-total"></span>`;
+    h.querySelector("span").textContent = LANE_LABEL[lane] || lane;
+    h.querySelector(".group-total").textContent = fmtMoney(subtotal);
+    group.appendChild(h);
+    const ul = document.createElement("ul");
+    for (const li of items) {
+      const liEl = document.createElement("li");
+      const main = document.createElement("div");
+      main.className = "li-main";
+      const label = document.createElement("div");
+      label.className = "li-label";
+      const eventTitles = li.eventIds.map(id => state.events.find(e => e.id === id)?.title || "(deleted)");
+      label.textContent = li.label || eventTitles.join(" + ");
+      const evList = document.createElement("div");
+      evList.className = "li-events";
+      if (li.label) evList.textContent = eventTitles.join(" · ");
+      main.appendChild(label);
+      if (li.label) main.appendChild(evList);
+      const cost = document.createElement("div");
+      cost.className = "li-cost";
+      cost.textContent = fmtMoney(li.cost);
+      const actions = document.createElement("div");
+      actions.className = "li-actions";
+      const editBtn = document.createElement("button");
+      editBtn.textContent = "Edit";
+      editBtn.addEventListener("click", () => editLineItem(li.id));
+      const delBtn = document.createElement("button");
+      delBtn.textContent = "×";
+      delBtn.className = "danger";
+      delBtn.title = "Delete line item";
+      delBtn.addEventListener("click", () => {
+        state.lineItems = state.lineItems.filter(x => x.id !== li.id);
+        save();
+        renderPricing();
+      });
+      actions.appendChild(editBtn);
+      actions.appendChild(delBtn);
+      liEl.appendChild(main);
+      liEl.appendChild(cost);
+      liEl.appendChild(actions);
+      ul.appendChild(liEl);
+    }
+    group.appendChild(ul);
+    container.appendChild(group);
+  }
+  if (state.lineItems.length === 0) {
+    container.innerHTML = `<div class="empty-state">No line items yet — select pills above and click + Add line item.</div>`;
+  }
+}
+
+function renderPricingSummary() {
+  const container = document.getElementById("pricing-summary");
+  if (!container) return;
+  ensureLineItems();
+  let booked = 0, tentativeTotal = 0;
+  for (const li of state.lineItems) {
+    const cost = Number(li.cost) || 0;
+    // Treat a line item as tentative if ANY of its events are tentative.
+    const isTent = li.eventIds.some(id => state.events.find(e => e.id === id)?.tentative);
+    if (isTent) tentativeTotal += cost;
+    else booked += cost;
+  }
+  container.innerHTML = "";
+  function tile(label, value, cls = "") {
+    const t = document.createElement("div");
+    t.className = "pricing-summary-tile " + cls;
+    t.innerHTML = `<span class="label"></span><span class="value"></span>`;
+    t.querySelector(".label").textContent = label;
+    t.querySelector(".value").textContent = value;
+    return t;
+  }
+  container.appendChild(tile("Booked", fmtMoney(booked)));
+  container.appendChild(tile("Tentative", fmtMoney(tentativeTotal)));
+  container.appendChild(tile("Grand total", fmtMoney(booked + tentativeTotal), "total"));
+}
+
+function editLineItem(id) {
+  const li = state.lineItems.find(x => x.id === id);
+  if (!li) return;
+  const newCost = prompt("Cost (numbers only):", li.cost);
+  if (newCost == null) return;
+  const parsed = Number(newCost);
+  if (isNaN(parsed)) { alert("Invalid number."); return; }
+  li.cost = parsed;
+  const newLabel = prompt("Label (optional, press Cancel to keep):", li.label || "");
+  if (newLabel != null) li.label = newLabel.trim() || null;
+  save();
+  renderPricing();
+}
+
+function addPricingLineItem() {
+  if (pricingSelection.size === 0) {
+    alert("Select at least one item to bundle.");
+    return;
+  }
+  const costInput = document.getElementById("pricing-cost");
+  const labelInput = document.getElementById("pricing-label");
+  const cost = Number(costInput.value);
+  if (isNaN(cost) || cost < 0) { alert("Enter a valid cost."); return; }
+  ensureLineItems();
+  state.lineItems.push({
+    id: "li" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+    eventIds: [...pricingSelection],
+    cost,
+    label: labelInput.value.trim() || null,
+  });
+  pricingSelection.clear();
+  costInput.value = "";
+  labelInput.value = "";
+  save();
+  renderPricing();
+}
+
 // Render the "still need to book" panel between overview and breakdown.
 // Lists every event flagged tentative, sorted by start. Hidden when none.
 function renderTodoList() {
@@ -1993,9 +2201,11 @@ function renderApp() {
     b.classList.toggle("active", b.dataset.tab === state.activeView);
   });
   document.getElementById("tab-main").hidden = state.activeView !== "main";
+  document.getElementById("tab-pricing").hidden = state.activeView !== "pricing";
   document.getElementById("tab-options").hidden = state.activeView !== "options";
 
   if (state.activeView === "main") render();
+  else if (state.activeView === "pricing") renderPricing();
   else renderOptions();
 }
 
@@ -2005,6 +2215,12 @@ document.querySelectorAll(".tab-btn").forEach(btn => {
     save();
     renderApp();
   });
+});
+
+document.getElementById("pricing-add-btn")?.addEventListener("click", addPricingLineItem);
+document.getElementById("pricing-clear-sel")?.addEventListener("click", () => {
+  pricingSelection.clear();
+  renderPricingPills();
 });
 
 document.getElementById("add-option-btn").addEventListener("click", () => {
