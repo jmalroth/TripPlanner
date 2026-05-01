@@ -782,7 +782,7 @@ function openEventDialog(id, optionId) {
     form.elements.end.value = ev.end;
     form.elements.endTime.value = ev.endTime || "";
     buildColorGrid(ev.color || "indigo");
-    form.elements.tentative.checked = !!ev.tentative;
+    if (form.elements.tentative) form.elements.tentative.checked = !!ev.tentative;
     form.elements.notes.value = ev.notes || "";
     deleteBtn.hidden = false;
   } else {
