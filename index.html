@@ -140,20 +140,14 @@
             <option value="location">Where</option>
             <option value="flights">Flights</option>
             <option value="lodging">Lodging</option>
+            <option value="rental">Rental car</option>
             <option value="activities" selected>Activities</option>
           </select>
         </label>
-        <label>Color
-          <select name="color">
-            <option value="indigo">Indigo</option>
-            <option value="teal">Teal</option>
-            <option value="amber">Amber</option>
-            <option value="rose">Rose</option>
-            <option value="emerald">Emerald</option>
-            <option value="violet">Violet</option>
-            <option value="grey">Grey</option>
-          </select>
-        </label>
+        <div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:4px;">Color</div>
+          <div class="color-grid" id="color-grid"></div>
+        </div>
       </div>
       <div class="row-2">
         <label>Start day<input name="start" type="date" required /></label>
@@ -163,6 +157,10 @@
         <label>End day<input name="end" type="date" required /></label>
         <label>End time<input name="endTime" type="time" /></label>
       </div>
+      <label class="checkbox-row">
+        <input type="checkbox" name="tentative" id="event-tentative" />
+        <span>Tentative — still need to book</span>
+      </label>
       <label>Notes<textarea name="notes" rows="2"></textarea></label>
       <input type="hidden" name="id" />
       <input type="hidden" name="optionId" />

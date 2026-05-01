@@ -58,6 +58,7 @@ const LANES = [
   { key: "location",   label: "Where" },
   { key: "lodging",    label: "Lodging" },
   { key: "flights",    label: "Flights" },
+  { key: "rental",     label: "Rental car", optional: true },
   { key: "activities", label: "Activities" },
 ];
 
@@ -497,6 +498,9 @@ function renderTimeline(container, rangeStart, rangeEnd, opts) {
   // Lanes
   for (const lane of LANES) {
     const laneEvents = visible.filter(ev => (ev.lane || "activities") === lane.key);
+    // Optional lanes (rental car, etc.) are hidden entirely when there are
+    // no events for them, so trips without one don't show an empty row.
+    if (lane.optional && laneEvents.length === 0) continue;
     grid.appendChild(el("div", "lane-label", lane.label));
 
     const laneArea = el("div", "lane-events");
@@ -536,7 +540,15 @@ function renderTimeline(container, rangeStart, rangeEnd, opts) {
       rightFrac = Math.min(totalDays, rightFrac);
       if (rightFrac <= leftFrac) continue;
 
-      const bar = el("div", `event ${ev.color || "indigo"}` + (ev._isOption ? " is-option" : ""));
+      const colorVal = ev.color || "indigo";
+      const isHex = colorVal.startsWith("#");
+      const bar = el("div", `event ${isHex ? "" : colorVal}` +
+        (ev._isOption ? " is-option" : "") +
+        (ev.tentative ? " tentative" : ""));
+      if (isHex) {
+        bar.style.background = colorVal;
+        bar.style.borderColor = colorVal;
+      }
       if (dayWidths) {
         const leftPx = fracToPx(leftFrac, dayWidths, dayOffsetsPx);
         const rightPx = fracToPx(rightFrac, dayWidths, dayOffsetsPx);
@@ -701,6 +713,56 @@ function findEvent(id) {
   return null;
 }
 
+const NAMED_COLORS = ["indigo","teal","sky","cyan","emerald","lime","amber","orange","rose","pink","violet","grey"];
+
+function buildColorGrid(selected) {
+  const grid = document.getElementById("color-grid");
+  if (!grid) return;
+  grid.innerHTML = "";
+  const isHex = selected && selected.startsWith("#");
+  for (const c of NAMED_COLORS) {
+    const label = document.createElement("label");
+    label.title = c;
+    const radio = document.createElement("input");
+    radio.type = "radio";
+    radio.name = "color";
+    radio.value = c;
+    if (!isHex && (selected === c || (!selected && c === "indigo"))) radio.checked = true;
+    const swatch = document.createElement("span");
+    swatch.className = "swatch";
+    swatch.style.background = `var(--${c})`;
+    label.appendChild(radio);
+    label.appendChild(swatch);
+    grid.appendChild(label);
+  }
+  // Custom color picker — uses a radio so it participates in the form, plus an
+  // <input type=color> that updates the radio's value when changed.
+  const customLabel = document.createElement("label");
+  customLabel.title = "Custom color";
+  const customRadio = document.createElement("input");
+  customRadio.type = "radio";
+  customRadio.name = "color";
+  customRadio.value = isHex ? selected : "#888888";
+  if (isHex) customRadio.checked = true;
+  const customSwatch = document.createElement("span");
+  customSwatch.className = "swatch custom-swatch";
+  customSwatch.textContent = "+";
+  if (isHex) customSwatch.style.background = selected;
+  const colorPicker = document.createElement("input");
+  colorPicker.type = "color";
+  colorPicker.value = isHex ? selected : "#888888";
+  colorPicker.addEventListener("input", (e) => {
+    customRadio.value = e.target.value;
+    customRadio.checked = true;
+    customSwatch.style.background = e.target.value;
+    customSwatch.textContent = "";
+  });
+  customSwatch.appendChild(colorPicker);
+  customLabel.appendChild(customRadio);
+  customLabel.appendChild(customSwatch);
+  grid.appendChild(customLabel);
+}
+
 function openEventDialog(id, optionId) {
   form.reset();
   const titleEl = document.getElementById("event-dialog-title");
@@ -719,7 +781,8 @@ function openEventDialog(id, optionId) {
     form.elements.startTime.value = ev.startTime || "";
     form.elements.end.value = ev.end;
     form.elements.endTime.value = ev.endTime || "";
-    form.elements.color.value = ev.color || "indigo";
+    buildColorGrid(ev.color || "indigo");
+    form.elements.tentative.checked = !!ev.tentative;
     form.elements.notes.value = ev.notes || "";
     deleteBtn.hidden = false;
   } else {
@@ -731,7 +794,7 @@ function openEventDialog(id, optionId) {
     const defaultStart = optionId ? (state.optionRangeStart || state.start) : state.start;
     form.elements.start.value = defaultStart || "";
     form.elements.end.value = defaultStart || "";
-    form.elements.color.value = optionId ? "indigo" : "emerald";
+    buildColorGrid(optionId ? "indigo" : "emerald");
     deleteBtn.hidden = true;
   }
   dialog.showModal();
@@ -753,6 +816,7 @@ form.addEventListener("submit", (e) => {
     end: data.end,
     color: data.color,
     notes: data.notes,
+    tentative: !!data.tentative,
   };
   if (data.startTime) updates.startTime = data.startTime;
   if (data.endTime) updates.endTime = data.endTime;
@@ -932,7 +996,7 @@ function parseCommand(text, defaultYear) {
   if (!trimmed) return null;
   if (!/^add\b/i.test(trimmed)) return null;
 
-  const m = trimmed.match(/^add\s+(?:(hotel|hotels|lodging|flight|flights|activity|activities|location|where|cruise)\s+)?(?:placeholder\s+)?(?:on\s+)?(.+)$/i);
+  const m = trimmed.match(/^add\s+(?:(hotel|hotels|lodging|flight|flights|activity|activities|location|where|cruise|rental|car)\s+)?(?:placeholder\s+)?(?:on\s+)?(.+)$/i);
   if (!m) return null;
 
   const laneWord = (m[1] || "").toLowerCase();
@@ -944,12 +1008,14 @@ function parseCommand(text, defaultYear) {
     activity: "activities", activities: "activities",
     location: "location", where: "location",
     cruise: "lodging",
+    rental: "rental", car: "rental",
   };
   // Detect lane from keyword OR from words anywhere in the rest of the
   // command (e.g. "add disney cruise from FLL on Dec 27-Jan 3" → lodging).
   let lane = laneMap[laneWord];
   if (!lane) {
-    if (/\bcruise\b/i.test(rest)) lane = "lodging";
+    if (/\b(rental car|car rental|rental)\b/i.test(rest)) lane = "rental";
+    else if (/\bcruise\b/i.test(rest)) lane = "lodging";
     else if (/\b(hotel|resort|villa|lodge|airbnb|vrbo)\b/i.test(rest)) lane = "lodging";
     else if (/\bflight\b/i.test(rest)) lane = "flights";
     else lane = "activities";
@@ -966,6 +1032,7 @@ function parseCommand(text, defaultYear) {
     flights: "indigo",
     location: "violet",
     activities: "emerald",
+    rental: "orange",
   };
 
   return [{
@@ -1152,7 +1219,8 @@ function parseLooseEvent(text, defaultYear) {
   // Lane heuristic: a lodging/flight/activity keyword wins; otherwise a
   // multi-day stretch defaults to a location, single day to an activity.
   let lane = "location";
-  if (/\b(hotel|hotels|lodging|inn|resort|villa|airbnb|vrbo|cruise|cruises)\b/i.test(title)) lane = "lodging";
+  if (/\b(rental car|car rental|rental|hertz|enterprise|avis|sixt|budget car)\b/i.test(title)) lane = "rental";
+  else if (/\b(hotel|hotels|lodging|inn|resort|villa|airbnb|vrbo|cruise|cruises)\b/i.test(title)) lane = "lodging";
   else if (/\b(flight|flights)\b/i.test(title)) lane = "flights";
   else if (/\b(activity|activities|tour|excursion|concert|show|game|dinner)\b/i.test(title)) lane = "activities";
   else if (start === end) lane = "activities";
@@ -1160,7 +1228,7 @@ function parseLooseEvent(text, defaultYear) {
   // Strip a leading "for"/"at"/"in"/"to" if present.
   title = title.replace(/^(?:for|at|in|to)\s+/i, "").trim();
 
-  const colorMap = { lodging: "amber", flights: "indigo", location: "violet", activities: "emerald" };
+  const colorMap = { lodging: "amber", flights: "indigo", location: "violet", activities: "emerald", rental: "orange" };
   return [{
     id: uid(),
     title,
@@ -1929,14 +1997,18 @@ function wirePasteBlock({ inputId, parseId, clearId, statusId, targetId }) {
       ? Number(state.start.split("-")[0])
       : new Date().getFullYear();
 
+    // Each parser returns either null (no match) or an array of events.
+    // parseFlights can return [] when it matches the format but extracts
+    // nothing usable — treat that as "no match" so the chain falls through.
+    const noMatch = (e) => !e || e.length === 0;
     let events = parseCommand(text, defaultYear);
-    if (!events) events = parseCruise(text, defaultYear);
-    if (!events) events = parseReservation(text, defaultYear);
-    if (!events) events = parseDeltaItinerary(text, defaultYear);
-    if (!events) events = parseFlights(text, defaultYear);
+    if (noMatch(events)) events = parseCruise(text, defaultYear);
+    if (noMatch(events)) events = parseReservation(text, defaultYear);
+    if (noMatch(events)) events = parseDeltaItinerary(text, defaultYear);
+    if (noMatch(events)) events = parseFlights(text, defaultYear);
     // parseLooseEvent is intentionally last so it doesn't steal multi-line
     // flight/reservation pastes.
-    if (!events) events = parseLooseEvent(text, defaultYear);
+    if (noMatch(events)) events = parseLooseEvent(text, defaultYear);
 
     if (!events || events.length === 0) {
       status.textContent = "Could not detect anything to add. Try a flight paste or a command like 'add hotel on jul 7 for znz hotel'.";
