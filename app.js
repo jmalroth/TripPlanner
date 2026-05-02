@@ -2458,16 +2458,24 @@ function renderOptions() {
     document.getElementById("option-range-end").value = range.end;
   }
 
-  // Refresh the paste target dropdown.
+  // Refresh the paste target dropdown — Options tab can only target an
+  // existing option (or you create a new one). Adding to the itinerary from
+  // here would mix what-if scenarios with the confirmed plan.
   const target = document.getElementById("paste-target");
   if (target) {
     const prev = target.value;
     target.innerHTML = "";
-    target.appendChild(new Option("My itinerary", "__main__"));
-    for (const opt of state.options) {
-      target.appendChild(new Option(opt.name, opt.id));
+    if (state.options.length === 0) {
+      target.appendChild(new Option("(create an option first)", ""));
+      target.disabled = true;
+    } else {
+      target.disabled = false;
+      for (const opt of state.options) {
+        target.appendChild(new Option(opt.name, opt.id));
+      }
+      const stillExists = state.options.find(o => o.id === prev);
+      target.value = stillExists ? prev : state.options[0].id;
     }
-    target.value = state.options.find(o => o.id === prev) ? prev : "__main__";
   }
 
   if (!range) {
@@ -2801,11 +2809,20 @@ function wirePasteBlock({ inputId, parseId, clearId, statusId, targetId }) {
       status.className = "paste-status error";
       return;
     }
-    // targetId may be a static "__main__" (main tab) or a select element id
-    // (options tab — user picks which option to add to).
-    const target = targetId
-      ? document.getElementById(targetId)?.value || "__main__"
-      : "__main__";
+    // targetId may be a static "__main__" (main tab — always the itinerary)
+    // or a select element id (options tab — must pick an existing option).
+    let target;
+    if (!targetId) {
+      target = "__main__";
+    } else {
+      const sel = document.getElementById(targetId);
+      target = sel?.value || "";
+      if (!target) {
+        status.textContent = "Create an option first, then paste into it.";
+        status.className = "paste-status error";
+        return;
+      }
+    }
     if (target === "__main__") {
       state.events.push(...events);
       // Expand the trip's date range so newly added events are visible.
