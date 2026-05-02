@@ -636,7 +636,10 @@ function ensureLineItems() {
 
 function eventToLineItem(eventId) {
   ensureLineItems();
-  return state.lineItems.find(li => li.eventIds.includes(eventId));
+  // While editing a line item, that line item's events are treated as
+  // unbundled so they can be re-selected/deselected freely.
+  return state.lineItems.find(li =>
+    li.id !== editingLineItemId && li.eventIds.includes(eventId));
 }
 
 function renderPricing() {
@@ -799,17 +802,44 @@ function renderPricingSummary() {
   container.appendChild(tile("Grand total", fmtMoney(booked + tentativeTotal)));
 }
 
+// ID of the line item currently being edited (null = adding new).
+let editingLineItemId = null;
+
 function editLineItem(id) {
   const li = state.lineItems.find(x => x.id === id);
   if (!li) return;
-  const newCost = prompt("Cost (numbers only):", li.cost);
-  if (newCost == null) return;
-  const parsed = Number(newCost);
-  if (isNaN(parsed)) { alert("Invalid number."); return; }
-  li.cost = parsed;
-  const newLabel = prompt("Label (optional, press Cancel to keep):", li.label || "");
-  if (newLabel != null) li.label = newLabel.trim() || null;
-  save();
+  editingLineItemId = id;
+  // Pull line item back into the form so any field can be changed.
+  pricingSelection.clear();
+  li.eventIds.forEach(eid => pricingSelection.add(eid));
+  document.getElementById("pricing-label").value = li.label || "";
+  formParties.length = 0;
+  if (li.pricing && Array.isArray(li.pricing.parties) && li.pricing.parties.length > 0) {
+    li.pricing.parties.forEach(p => formParties.push({ name: p.name, input: p.input }));
+  } else {
+    // Legacy {cost: N} item — load it as a single "Mine" party.
+    formParties.push({ name: "Mine", input: String(li.cost || 0) });
+  }
+  // Update the action button label/visibility.
+  const addBtn = document.getElementById("pricing-add-btn");
+  if (addBtn) addBtn.textContent = "Save changes";
+  const cancelBtn = document.getElementById("pricing-cancel-edit");
+  if (cancelBtn) cancelBtn.hidden = false;
+  renderPricing();
+  // Scroll the form into view.
+  document.querySelector(".pricing-builder")?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function cancelLineItemEdit() {
+  editingLineItemId = null;
+  pricingSelection.clear();
+  document.getElementById("pricing-label").value = "";
+  formParties.length = 0;
+  formParties.push({ name: "Mine", input: "" });
+  const addBtn = document.getElementById("pricing-add-btn");
+  if (addBtn) addBtn.textContent = "+ Add line item";
+  const cancelBtn = document.getElementById("pricing-cancel-edit");
+  if (cancelBtn) cancelBtn.hidden = true;
   renderPricing();
 }
 
@@ -934,12 +964,28 @@ function addPricingLineItem() {
     .filter(p => parseAmount(p.input) > 0);
   if (parties.length === 0) { alert("Enter at least one amount."); return; }
   ensureLineItems();
-  state.lineItems.push({
-    id: "li" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
-    eventIds: [...pricingSelection],
-    label: labelInput.value.trim() || null,
-    pricing: { parties },
-  });
+  if (editingLineItemId) {
+    // Update existing line item in place.
+    const li = state.lineItems.find(x => x.id === editingLineItemId);
+    if (li) {
+      li.eventIds = [...pricingSelection];
+      li.label = labelInput.value.trim() || null;
+      li.pricing = { parties };
+      delete li.cost; // remove legacy field if present
+    }
+    editingLineItemId = null;
+    const addBtn = document.getElementById("pricing-add-btn");
+    if (addBtn) addBtn.textContent = "+ Add line item";
+    const cancelBtn = document.getElementById("pricing-cancel-edit");
+    if (cancelBtn) cancelBtn.hidden = true;
+  } else {
+    state.lineItems.push({
+      id: "li" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+      eventIds: [...pricingSelection],
+      label: labelInput.value.trim() || null,
+      pricing: { parties },
+    });
+  }
   pricingSelection.clear();
   labelInput.value = "";
   formParties.length = 0;
@@ -2496,6 +2542,7 @@ document.getElementById("pricing-clear-sel")?.addEventListener("click", () => {
   pricingSelection.clear();
   renderPricingPills();
 });
+document.getElementById("pricing-cancel-edit")?.addEventListener("click", cancelLineItemEdit);
 document.getElementById("pricing-add-party")?.addEventListener("click", () => {
   if (formParties.length >= 4) return;
   formParties.push({ name: `Group ${formParties.length + 1}`, input: "" });
