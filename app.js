@@ -2459,23 +2459,18 @@ function renderOptions() {
   }
 
   // Refresh the paste target dropdown — Options tab can only target an
-  // existing option (or you create a new one). Adding to the itinerary from
-  // here would mix what-if scenarios with the confirmed plan.
+  // existing option, or "+ New option" which creates one at parse time.
   const target = document.getElementById("paste-target");
   if (target) {
     const prev = target.value;
     target.innerHTML = "";
-    if (state.options.length === 0) {
-      target.appendChild(new Option("(create an option first)", ""));
-      target.disabled = true;
-    } else {
-      target.disabled = false;
-      for (const opt of state.options) {
-        target.appendChild(new Option(opt.name, opt.id));
-      }
-      const stillExists = state.options.find(o => o.id === prev);
-      target.value = stillExists ? prev : state.options[0].id;
+    target.disabled = false;
+    for (const opt of state.options) {
+      target.appendChild(new Option(opt.name, opt.id));
     }
+    target.appendChild(new Option("+ New option", "__new__"));
+    const stillExists = state.options.find(o => o.id === prev);
+    target.value = stillExists ? prev : (state.options.length > 0 ? state.options[0].id : "__new__");
   }
 
   if (!range) {
@@ -2762,15 +2757,20 @@ document.getElementById("pricing-add-party")?.addEventListener("click", () => {
   renderPricingPartiesForm();
 });
 
-document.getElementById("add-option-btn").addEventListener("click", () => {
-  const range = getOptionRange();
-  if (!range) return;
-  state.options.push({
+function createOption(name) {
+  const opt = {
     id: uid(),
-    name: `Option ${state.options.length + 1}`,
+    name: name || `Option ${state.options.length + 1}`,
     events: [],
-  });
+  };
+  state.options.push(opt);
   save();
+  return opt;
+}
+
+document.getElementById("add-option-btn")?.addEventListener("click", () => {
+  if (!getOptionRange()) return;
+  createOption();
   renderApp();
 });
 
@@ -2810,17 +2810,18 @@ function wirePasteBlock({ inputId, parseId, clearId, statusId, targetId }) {
       return;
     }
     // targetId may be a static "__main__" (main tab — always the itinerary)
-    // or a select element id (options tab — must pick an existing option).
+    // or a select element id (options tab — must pick an existing option,
+    // or "__new__" to spin up a fresh one at parse time).
     let target;
     if (!targetId) {
       target = "__main__";
     } else {
       const sel = document.getElementById(targetId);
-      target = sel?.value || "";
-      if (!target) {
-        status.textContent = "Create an option first, then paste into it.";
-        status.className = "paste-status error";
-        return;
+      target = sel?.value || "__new__";
+      if (target === "__new__") {
+        // Create a new option on demand and route the paste into it.
+        const newOpt = createOption();
+        target = newOpt.id;
       }
     }
     if (target === "__main__") {
