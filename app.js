@@ -2766,9 +2766,18 @@ document.getElementById("pricing-add-party")?.addEventListener("click", () => {
 });
 
 function createOption(name) {
+  // Pick the next available "Option N" number so deleting an option in the
+  // middle doesn't cause the next "+ New option" to collide with an existing
+  // name (e.g. Option 1, Option 3 → next is Option 2 if free, otherwise 4).
+  function nextDefaultName() {
+    const taken = new Set(state.options.map(o => o.name));
+    let n = 1;
+    while (taken.has(`Option ${n}`)) n++;
+    return `Option ${n}`;
+  }
   const opt = {
     id: uid(),
-    name: name || `Option ${state.options.length + 1}`,
+    name: name || nextDefaultName(),
     events: [],
   };
   state.options.push(opt);
