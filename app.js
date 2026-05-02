@@ -2469,8 +2469,10 @@ function renderOptions() {
       target.appendChild(new Option(opt.name, opt.id));
     }
     target.appendChild(new Option("+ New option", "__new__"));
+    // Default to "+ New option" so a fresh paste creates a new option
+    // unless the user explicitly picked an existing one earlier.
     const stillExists = state.options.find(o => o.id === prev);
-    target.value = stillExists ? prev : (state.options.length > 0 ? state.options[0].id : "__new__");
+    target.value = stillExists ? prev : "__new__";
   }
 
   if (!range) {
