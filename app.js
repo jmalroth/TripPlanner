@@ -549,25 +549,26 @@ function renderTimeline(container, rangeStart, rangeEnd, opts) {
         bar.style.background = colorVal;
         bar.style.borderColor = colorVal;
       }
+      let widthPx;
       if (dayWidths) {
         const leftPx = fracToPx(leftFrac, dayWidths, dayOffsetsPx);
         const rightPx = fracToPx(rightFrac, dayWidths, dayOffsetsPx);
-        bar.style.left = `${leftPx + 1}px`;
-        bar.style.width = `${Math.max(2, rightPx - leftPx - 2)}px`;
-      } else {
-        // Compute in pixels so a 1-hour bar isn't expanded by the .event's
-        // intrinsic min-content (padding+border would otherwise force ~19px
-        // and cause sequential events to overlap).
-        const leftPx = (leftFrac / totalDays) * stretchLanePx;
-        const widthPx = Math.max(2, ((rightFrac - leftFrac) / totalDays) * stretchLanePx - 2);
+        widthPx = Math.max(2, rightPx - leftPx - 2);
         bar.style.left = `${leftPx + 1}px`;
         bar.style.width = `${widthPx}px`;
-        // Drop text + padding when there isn't room — keeps the bar's actual
-        // pixel width honest so adjacent events don't overlap.
-        if (widthPx < 28) {
-          bar.style.padding = "0";
-          bar.dataset.narrow = "1";
-        }
+      } else {
+        const leftPx = (leftFrac / totalDays) * stretchLanePx;
+        widthPx = Math.max(2, ((rightFrac - leftFrac) / totalDays) * stretchLanePx - 2);
+        bar.style.left = `${leftPx + 1}px`;
+        bar.style.width = `${widthPx}px`;
+      }
+      // Drop text + padding when the bar is too narrow — keeps the bar's
+      // pixel width honest so back-to-back short events (a 1-hour flight
+      // followed by a layover) don't overlap. Applies in both stretch and
+      // fixed-day-width modes.
+      if (widthPx < 28) {
+        bar.style.padding = "0";
+        bar.dataset.narrow = "1";
       }
       bar.style.top = `calc(${row} * (var(--row-h) + 4px) + 4px)`;
       bar.textContent = bar.dataset.narrow ? "" : ev.title;
