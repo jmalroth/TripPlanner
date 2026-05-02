@@ -2712,6 +2712,10 @@ function removeAppliedOption(optId) {
 // --- view dispatcher / tabs ---
 
 function renderApp() {
+  // Preserve scroll position across re-renders so deleting / editing an
+  // event doesn't snap the page back to the top.
+  const scrollY = window.scrollY;
+
   // Always sync the topbar fields, regardless of which view is active.
   document.getElementById("trip-name").value = state.name || "";
   document.getElementById("trip-start").value = state.start || "";
@@ -2729,6 +2733,8 @@ function renderApp() {
   if (state.activeView === "main") render();
   else if (state.activeView === "pricing") renderPricing();
   else renderOptions();
+
+  window.scrollTo({ top: scrollY, behavior: "instant" });
 }
 
 document.querySelectorAll(".tab-btn").forEach(btn => {
