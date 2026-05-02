@@ -1723,6 +1723,208 @@ function parseCruise(text, defaultYear) {
   }];
 }
 
+// --- Smart fallback parser ---
+// Scans free-form text for dates, times, and category-defining keywords
+// (airlines, hotels, cruise lines, rental car brands, airport codes), and
+// builds a best-effort event. Runs as the very last fallback after every
+// strict parser fails to match.
+
+const SMART_HOTEL_KEYWORDS = [
+  "hotel","motel","resort","villa","villas","inn","suite","suites","lodge","bnb","airbnb","vrbo",
+  "polynesian","hilton","marriott","hyatt","sheraton","westin","four seasons","ritz","wyndham",
+  "best western","embassy","hampton","courtyard","residence","doubletree","holiday inn","crowne plaza",
+  "ramada","quality inn","comfort inn","la quinta","fairfield","candlewood","staybridge","aloft",
+  "moxy","ac hotel","element","disney's"
+];
+const SMART_AIRLINE_KEYWORDS = [
+  "delta","united","american","southwest","alaska","jetblue","spirit","frontier","hawaiian",
+  "air canada","lufthansa","british airways","air france","klm","emirates","qatar","etihad","singapore",
+  "cathay","kenya airways","discover airlines","auric air","ryanair","easyjet","iberia","turkish",
+  "saudia","ethiopian","virgin","westjet","aeromexico","copa","avianca","latam","ana","jal","korean",
+  "asiana","thai","philippine","air india","aeroflot","sas","finnair","tap","swiss","austrian","brussels"
+];
+const SMART_CRUISE_KEYWORDS = [
+  "cruise","disney cruise","royal caribbean","carnival","norwegian","princess","holland america",
+  "msc","celebrity","cunard","viking","oceania","seabourn","silversea","azamara","disney dream",
+  "disney magic","disney wish","disney wonder","embarkation","disembarkation"
+];
+const SMART_RENTAL_KEYWORDS = [
+  "rental car","car rental","hertz","avis","enterprise","sixt","budget rent","alamo","national car",
+  "thrifty","dollar rent","europcar","fox rent","payless"
+];
+const SMART_FLIGHT_KEYWORDS = [
+  "flight","airline","departure gate","arrival gate","boarding","layover","connection",
+  "round trip","one way"
+];
+
+function smartContainsAny(lower, keywords) {
+  return keywords.some(k => lower.includes(k));
+}
+
+// Find every "Month Day" / "ISO" / "M/D" date plus bare days that inherit
+// the previous month/year. Returns ISO strings in document order.
+function smartFindDates(text, defaultYear) {
+  const monthMap = {
+    jan:1, feb:2, mar:3, apr:4, may:5, jun:6, jul:7, aug:8, sep:9, sept:9, oct:10, nov:11, dec:12,
+    january:1, february:2, march:3, april:4, june:6, july:7, august:8, september:9, october:10, november:11, december:12,
+  };
+  const out = [];
+  // Month + day (with optional ordinal suffix and year)
+  const monthDayRx = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s*(\d{1,2})(?:st|nd|rd|th)?(?:[, ]+(\d{4}))?/gi;
+  // Pure ISO YYYY-MM-DD
+  const isoRx = /\b(\d{4})-(\d{2})-(\d{2})\b/g;
+  // M/D[/Y]
+  const slashRx = /\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/g;
+  // DDMON form (e.g. 19DEC)
+  const ddmonRx = /\b(\d{1,2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\b/gi;
+
+  function push(idx, iso) { out.push({ idx, iso }); }
+
+  let m;
+  while ((m = monthDayRx.exec(text))) {
+    const mo = monthMap[m[1].toLowerCase()];
+    if (mo) push(m.index, `${m[3] ? +m[3] : defaultYear}-${String(mo).padStart(2,"0")}-${String(+m[2]).padStart(2,"0")}`);
+  }
+  while ((m = isoRx.exec(text))) {
+    push(m.index, `${m[1]}-${m[2]}-${m[3]}`);
+  }
+  while ((m = slashRx.exec(text))) {
+    let y = m[3] ? +m[3] : defaultYear;
+    if (y < 100) y += 2000;
+    push(m.index, `${y}-${String(+m[1]).padStart(2,"0")}-${String(+m[2]).padStart(2,"0")}`);
+  }
+  while ((m = ddmonRx.exec(text))) {
+    const mo = monthMap[m[2].toLowerCase()];
+    if (mo) push(m.index, `${defaultYear}-${String(mo).padStart(2,"0")}-${String(+m[1]).padStart(2,"0")}`);
+  }
+  out.sort((a, b) => a.idx - b.idx);
+  // De-dupe overlapping matches at the same position.
+  const seen = new Set();
+  return out.filter(d => {
+    const key = `${d.idx}|${d.iso}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function smartFindTimes(text) {
+  const out = [];
+  const rx = /\b(\d{1,2}):(\d{2})\s*(AM|PM|am|pm)?\b/g;
+  let m;
+  while ((m = rx.exec(text))) {
+    let h = +m[1];
+    const min = +m[2];
+    if (h > 23 || min > 59) continue;
+    if (m[3]) {
+      const isPM = /pm/i.test(m[3]);
+      if (isPM && h < 12) h += 12;
+      if (!isPM && h === 12) h = 0;
+    }
+    out.push({ idx: m.index, iso: `${String(h).padStart(2,"0")}:${String(min).padStart(2,"0")}` });
+  }
+  return out;
+}
+
+function smartFindAirportCodes(text) {
+  // Three uppercase letters in parens or surrounded by non-word chars.
+  const codes = [];
+  const rx = /\(([A-Z]{3})\)|\b([A-Z]{3})\b/g;
+  let m;
+  while ((m = rx.exec(text))) {
+    const code = m[1] || m[2];
+    if (code) codes.push(code);
+  }
+  return codes;
+}
+
+function parseSmart(text, defaultYear) {
+  const trimmed = text.trim();
+  if (trimmed.length < 4) return null;
+  const lower = trimmed.toLowerCase();
+
+  const dates = smartFindDates(trimmed, defaultYear);
+  if (dates.length === 0) return null;
+  const start = dates[0].iso;
+  let end = dates[dates.length - 1].iso;
+  // If a single date appears twice (start == end == one match), keep them equal.
+  // If the second is earlier than the first, swap.
+  if (end < start) end = start;
+
+  const times = smartFindTimes(trimmed);
+  let startTime = times[0]?.iso || null;
+  let endTime = times.length > 1 ? times[times.length - 1].iso : null;
+
+  // Lane detection — most-specific keyword wins.
+  let lane = "activities", color = "emerald";
+  if (smartContainsAny(lower, SMART_CRUISE_KEYWORDS)) { lane = "lodging"; color = "amber"; }
+  else if (smartContainsAny(lower, SMART_RENTAL_KEYWORDS)) { lane = "rental"; color = "orange"; }
+  else if (smartContainsAny(lower, SMART_FLIGHT_KEYWORDS) || smartContainsAny(lower, SMART_AIRLINE_KEYWORDS)) { lane = "flights"; color = "indigo"; }
+  else if (smartContainsAny(lower, SMART_HOTEL_KEYWORDS)) { lane = "lodging"; color = "amber"; }
+  else if (start !== end) { lane = "location"; color = "violet"; }
+
+  // Title — pick the most informative line / brand / route.
+  const lines = trimmed.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  let title = null;
+
+  if (lane === "flights") {
+    const codes = smartFindAirportCodes(trimmed);
+    if (codes.length >= 2) title = `${codes[0]} → ${codes[codes.length - 1]}`;
+    if (!title) {
+      // First airline name found
+      for (const k of SMART_AIRLINE_KEYWORDS) {
+        const idx = lower.indexOf(k);
+        if (idx >= 0) { title = trimmed.slice(idx, idx + k.length).replace(/\b\w/g, c => c.toUpperCase()); break; }
+      }
+    }
+    if (!title) title = "Flight";
+  } else if (lane === "lodging") {
+    // Look for a "Hotel" header on its own line, take the next line (cruise
+    // confirmations, hotel emails often have this).
+    for (let i = 0; i < lines.length - 1; i++) {
+      if (/^(hotel|resort|cruise|property|accommodation)s?\s*$/i.test(lines[i])) {
+        title = lines[i + 1];
+        break;
+      }
+    }
+    if (!title) {
+      // Else: the first line that contains a known hotel/cruise brand.
+      const allKeys = [...SMART_HOTEL_KEYWORDS, ...SMART_CRUISE_KEYWORDS];
+      title = lines.find(l => allKeys.some(k => l.toLowerCase().includes(k)));
+    }
+    if (!title) title = lines[0] || "Lodging";
+  } else if (lane === "rental") {
+    title = lines.find(l => SMART_RENTAL_KEYWORDS.some(k => l.toLowerCase().includes(k))) || "Rental car";
+  } else {
+    // Activity / location: first non-trivial line that isn't a date or time.
+    title = lines.find(l =>
+      !/^\d/.test(l) && l.length > 2 && !/(^date:|^confirmation|^arrive:|^depart:|^check[- ]in)/i.test(l)
+    ) || "Event";
+  }
+  // Trim long titles to something reasonable.
+  if (title.length > 80) title = title.slice(0, 78).trim() + "…";
+
+  // For non-flight events, drop times unless an explicit AM/PM was given —
+  // an arbitrary "12:34" in body copy shouldn't pin the bar to that hour.
+  if (lane !== "flights") {
+    const hasAmPm = /\b\d{1,2}:\d{2}\s*(AM|PM)/i.test(trimmed);
+    if (!hasAmPm) { startTime = null; endTime = null; }
+  }
+
+  const ev = {
+    id: uid(),
+    title,
+    lane,
+    color,
+    start,
+    end,
+    notes: "Auto-detected from paste",
+  };
+  if (startTime) ev.startTime = startTime;
+  if (endTime && endTime !== startTime) ev.endTime = endTime;
+  return [ev];
+}
+
 // Loose natural-language parser for inputs like "Orlando from Dec 19-26",
 // "Hawaii Mar 1 to Mar 8", or "concert on jul 4". Handles cases where the
 // stricter parseCommand doesn't fire because there's no "add" prefix.
@@ -1740,7 +1942,9 @@ function parseLooseEvent(text, defaultYear) {
     jan:1, feb:2, mar:3, apr:4, may:5, jun:6, jul:7, aug:8, sep:9, sept:9, oct:10, nov:11, dec:12,
     january:1, february:2, march:3, april:4, june:6, july:7, august:8, september:9, october:10, november:11, december:12,
   };
-  const tokenRx = /\b(?:(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s*)?(\d{1,2})(?:,?\s+(\d{4}))?\b/gi;
+  // Allow ordinal suffix on day ("July 4th 2026", "1st", "2nd", "3rd").
+  // Lookbehind/ahead for ":" excludes digits inside times like "7:10pm".
+  const tokenRx = /\b(?:(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s*)?(?<!:)(\d{1,2})(?!:)(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?\b/gi;
   const dates = [];
   let firstDateIdx = -1;
   let curYear = defaultYear;
@@ -1779,9 +1983,10 @@ function parseLooseEvent(text, defaultYear) {
   // Lane heuristic: a lodging/flight/activity keyword wins; otherwise a
   // multi-day stretch defaults to a location, single day to an activity.
   let lane = "location";
-  if (/\b(rental car|car rental|rental|hertz|enterprise|avis|sixt|budget car)\b/i.test(title)) lane = "rental";
-  else if (/\b(hotel|hotels|lodging|inn|resort|villa|airbnb|vrbo|cruise|cruises)\b/i.test(title)) lane = "lodging";
-  else if (/\b(flight|flights)\b/i.test(title)) lane = "flights";
+  if (/\b(rental car|car rental|rental|hertz|enterprise|avis|sixt|budget car|alamo|national car|thrifty|dollar rent|europcar)\b/i.test(title)) lane = "rental";
+  else if (/\b(hotel|hotels|lodging|inn|resort|villa|airbnb|vrbo|cruise|cruises|hilton|marriott|hyatt|sheraton|westin|wyndham|disney's)\b/i.test(title)) lane = "lodging";
+  else if (/\b(flight|flights|airline|delta|united|american|southwest|alaska airlines|jetblue|lufthansa|emirates|qatar)\b/i.test(title)) lane = "flights";
+  else if (/\b(boat|charter|tour|excursion|tickets?|game|show|concert|dinner|tasting|reservation|admission|pass|safari)\b/i.test(title)) lane = "activities";
   else if (/\b(activity|activities|tour|excursion|concert|show|game|dinner)\b/i.test(title)) lane = "activities";
   else if (start === end) lane = "activities";
 
@@ -2586,9 +2791,10 @@ function wirePasteBlock({ inputId, parseId, clearId, statusId, targetId }) {
     if (noMatch(events)) events = parseReservation(text, defaultYear);
     if (noMatch(events)) events = parseDeltaItinerary(text, defaultYear);
     if (noMatch(events)) events = parseFlights(text, defaultYear);
-    // parseLooseEvent is intentionally last so it doesn't steal multi-line
-    // flight/reservation pastes.
+    // parseLooseEvent handles short single-line natural language; parseSmart
+    // is the catch-all for free-form messy pastes when nothing else matched.
     if (noMatch(events)) events = parseLooseEvent(text, defaultYear);
+    if (noMatch(events)) events = parseSmart(text, defaultYear);
 
     if (!events || events.length === 0) {
       status.textContent = "Could not detect anything to add. Try a flight paste or a command like 'add hotel on jul 7 for znz hotel'.";
