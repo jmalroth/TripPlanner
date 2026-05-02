@@ -2448,6 +2448,11 @@ function getOptionRange() {
 }
 
 function renderOptions() {
+  // Natural-numeric sort by name so renames stay in number order
+  // ("Option 2" before "Option 10", "1 - cheap" before "2 - flex").
+  state.options.sort((a, b) =>
+    (a.name || "").localeCompare(b.name || "", undefined, { numeric: true, sensitivity: "base" }));
+
   const range = getOptionRange();
   const list = document.getElementById("options-list");
   list.innerHTML = "";
