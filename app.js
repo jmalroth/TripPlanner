@@ -776,25 +776,25 @@ function renderPricingLineItems() {
       evList.className = "li-events";
       if (li.label) evList.textContent = eventTitles.join(" · ");
       if (li.label) main.appendChild(evList);
-      // Per-group amount pills (skip groups with $0 contribution).
+      // Per-group amount pills + total cost — all right-aligned together.
       ensurePriceSplit();
-      const pills = document.createElement("div");
-      pills.className = "li-group-pills";
+      const right = document.createElement("div");
+      right.className = "li-right";
       state.priceSplit.groups.forEach((g, idx) => {
         const amt = lineItemGroupAmount(li, g.id, idx);
         if (!amt) return;
         const isOverridden = li.overrides && li.overrides[g.id] != null;
         const pill = document.createElement("span");
-        pill.className = `group-pill bg-${g.color || "indigo"}` + (isOverridden ? " overridden" : "");
+        pill.className = `group-pill outline-${g.color || "indigo"}` + (isOverridden ? " overridden" : "");
         pill.textContent = `${g.name}: ${fmtMoney(amt)}`;
         if (isOverridden) pill.title = "Overridden (default would be " +
           fmtMoney((li.total || 0) * (g.share || 0)) + ")";
-        pills.appendChild(pill);
+        right.appendChild(pill);
       });
-      main.appendChild(pills);
-      const cost = document.createElement("div");
+      const cost = document.createElement("span");
       cost.className = "li-cost";
       cost.textContent = fmtMoney(lineItemTotal(li));
+      right.appendChild(cost);
       const actions = document.createElement("div");
       actions.className = "li-actions";
       const editBtn = document.createElement("button");
@@ -812,7 +812,7 @@ function renderPricingLineItems() {
       actions.appendChild(editBtn);
       actions.appendChild(delBtn);
       liEl.appendChild(main);
-      liEl.appendChild(cost);
+      liEl.appendChild(right);
       liEl.appendChild(actions);
       ul.appendChild(liEl);
     }
@@ -929,6 +929,27 @@ function parseAmount(str) {
 }
 
 // --- price split (trip-level default) ---
+// Compute each group's normalized share from its raw shareInput. If any
+// value exceeds 1 it's treated as a quantity and the whole set normalizes
+// against the sum, so the user can type "2, 1, 1" and get 50%/25%/25%.
+// Pure fractions/percents (≤1) are used as-is.
+function recomputeShares() {
+  if (!state.priceSplit || !state.priceSplit.groups) return;
+  const parsed = state.priceSplit.groups.map(g => {
+    const v = parseAmount(g.shareInput);
+    return isNaN(v) ? 0 : v;
+  });
+  const anyOver1 = parsed.some(v => v > 1);
+  if (anyOver1) {
+    const sum = parsed.reduce((a, b) => a + b, 0);
+    state.priceSplit.groups.forEach((g, i) => {
+      g.share = sum > 0 ? parsed[i] / sum : 0;
+    });
+  } else {
+    state.priceSplit.groups.forEach((g, i) => { g.share = parsed[i]; });
+  }
+}
+
 function ensurePriceSplit() {
   if (!state.priceSplit || !Array.isArray(state.priceSplit.groups) || state.priceSplit.groups.length === 0) {
     // Seed from any group names already used in legacy line items so the
@@ -955,11 +976,10 @@ function ensurePriceSplit() {
     const palette = ["indigo", "rose", "emerald", "amber"];
     for (let i = 0; i < state.priceSplit.groups.length; i++) {
       const g = state.priceSplit.groups[i];
-      const v = parseAmount(g.shareInput);
-      g.share = isNaN(v) ? 0 : v;
       if (!g.color) g.color = palette[i % palette.length];
     }
   }
+  recomputeShares();
 }
 
 function partyAmount(p) {
@@ -1006,12 +1026,39 @@ function lineItemOthersTotal(li) {
 let formTotalInput = "";
 const formOverrides = {}; // { groupId: input string }
 
+function refreshSplitDisplay() {
+  // Update the % spans + warn + downstream pricing without rebuilding rows.
+  // Caller is responsible for already having updated state.priceSplit.
+  recomputeShares();
+  const rows = document.querySelectorAll("#pricing-split-rows .pricing-split-row");
+  rows.forEach((row, idx) => {
+    const g = state.priceSplit.groups[idx];
+    if (!g) return;
+    const pct = row.querySelector(".group-pct");
+    if (pct) {
+      pct.textContent = `${(g.share * 100).toFixed(1)}%`;
+      pct.classList.remove("invalid");
+    }
+  });
+  const sumShares = state.priceSplit.groups.reduce((s, g) => s + (g.share || 0), 0);
+  const warn = document.getElementById("pricing-split-warn");
+  if (warn) {
+    warn.textContent = Math.abs(sumShares - 1) > 0.001
+      ? `Shares total ${(sumShares * 100).toFixed(1)}% (expected 100%)`
+      : "";
+  }
+  // Refresh just the bits that depend on shares — leave the split editor
+  // and its inputs alone so focus is preserved while typing.
+  renderPricingLineItems();
+  renderPricingSummary();
+  updateLineItemFormBreakdown();
+}
+
 function renderSplitEditor() {
   ensurePriceSplit();
   const container = document.getElementById("pricing-split-rows");
   if (!container) return;
   container.innerHTML = "";
-  const sumShares = state.priceSplit.groups.reduce((s, g) => s + (g.share || 0), 0);
   state.priceSplit.groups.forEach((g, idx) => {
     const row = document.createElement("div");
     row.className = "pricing-split-row";
@@ -1022,32 +1069,24 @@ function renderSplitEditor() {
     nameInput.placeholder = idx === 0 ? "Mine" : `Group ${idx + 1}`;
     nameInput.addEventListener("input", () => {
       g.name = nameInput.value;
-      save(); renderPricing();
+      // Update displayed names without rebuilding rows.
+      renderPricingLineItems();
+      renderPricingSummary();
+      renderLineItemForm();
+      save();
     });
     const shareInput = document.createElement("input");
     shareInput.type = "text";
     shareInput.className = "group-share";
     shareInput.value = g.shareInput;
-    shareInput.placeholder = "share (1/2, 50%, 0.5)";
+    shareInput.placeholder = "1/2, 50%, or 2";
     const pct = document.createElement("span");
     pct.className = "group-pct";
-    function refreshPct() {
-      const v = parseAmount(shareInput.value);
-      if (isNaN(v)) {
-        pct.textContent = "invalid";
-        pct.classList.add("invalid");
-      } else {
-        pct.textContent = `${(v * 100).toFixed(1)}%`;
-        pct.classList.remove("invalid");
-      }
-    }
     shareInput.addEventListener("input", () => {
       g.shareInput = shareInput.value;
-      const v = parseAmount(g.shareInput);
-      g.share = isNaN(v) ? 0 : v;
-      save(); renderPricing();
+      refreshSplitDisplay();
+      save();
     });
-    refreshPct();
     row.appendChild(nameInput);
     row.appendChild(shareInput);
     row.appendChild(pct);
@@ -1065,12 +1104,10 @@ function renderSplitEditor() {
     }
     container.appendChild(row);
   });
-  const warn = document.getElementById("pricing-split-warn");
-  if (warn) {
-    warn.textContent = Math.abs(sumShares - 1) > 0.001 ? `Shares total ${(sumShares * 100).toFixed(1)}% (expected 100%)` : "";
-  }
   const addBtn = document.getElementById("pricing-add-split-group");
   if (addBtn) addBtn.style.display = state.priceSplit.groups.length >= 4 ? "none" : "";
+  // Initial display update.
+  refreshSplitDisplay();
 }
 
 function renderLineItemForm() {
