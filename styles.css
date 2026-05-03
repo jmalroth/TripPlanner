@@ -766,6 +766,9 @@ main {
 .todo-section > summary::-webkit-details-marker { display: none; }
 .todo-section > summary::before { content: "▾ "; color: var(--muted); display: inline-block; }
 .todo-section:not([open]) > summary::before { content: "▸ "; }
+.todo-section, .todo-section .todo-list, .todo-section .todo-list li { text-align: left; }
+.todo-add-btn { margin-top: 10px; padding: 6px 12px; background: transparent; border: 1px dashed var(--line); color: var(--muted); border-radius: 6px; cursor: pointer; font-size: 13px; }
+.todo-add-btn:hover { border-color: var(--accent); color: var(--accent); }
 .todo-list .todo-check { margin: 0; cursor: pointer; flex-shrink: 0; }
 .todo-list li.bundle { background: var(--panel); border: 1px solid var(--accent); border-radius: 8px; flex-direction: column; align-items: stretch; gap: 0; padding: 0; }
 .todo-list li.bundle .bundle-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; cursor: pointer; }

@@ -1364,43 +1364,22 @@ function renderTodoList() {
     list.appendChild(li);
   }
 
-  // Then unbundled tentative events with checkboxes for selection.
+  // Then unbundled tentative events.
   for (const ev of tentative) {
     if (findBundleForEvent(ev.id)) continue;
     const li = document.createElement("li");
-    const check = document.createElement("input");
-    check.type = "checkbox";
-    check.className = "todo-check";
-    check.checked = todoSelection.has(ev.id);
-    check.addEventListener("click", (e) => e.stopPropagation());
-    check.addEventListener("change", () => {
-      if (check.checked) todoSelection.add(ev.id);
-      else todoSelection.delete(ev.id);
-      updateTodoBundleBar();
-    });
     const title = document.createElement("span");
     title.className = "todo-title";
     title.textContent = ev.title;
     const meta = document.createElement("span");
     meta.className = "todo-meta";
     meta.textContent = ev.start === ev.end ? ev.start : `${ev.start} → ${ev.end}`;
-    li.appendChild(check);
     li.appendChild(todoSwatch(ev));
     li.appendChild(title);
     li.appendChild(meta);
-    li.addEventListener("click", (e) => {
-      if (e.target === check) return;
-      openEventDialog(ev.id, null);
-    });
+    li.addEventListener("click", () => openEventDialog(ev.id, null));
     list.appendChild(li);
   }
-  updateTodoBundleBar();
-}
-
-function updateTodoBundleBar() {
-  const bar = document.getElementById("todo-bundle-bar");
-  if (!bar) return;
-  bar.hidden = todoSelection.size < 2;
 }
 
 function addTodoBundle() {
@@ -3000,10 +2979,12 @@ document.querySelectorAll(".tab-btn").forEach(btn => {
   });
 });
 
-document.getElementById("todo-bundle-add")?.addEventListener("click", addTodoBundle);
-document.getElementById("todo-bundle-clear")?.addEventListener("click", () => {
-  todoSelection.clear();
-  renderTodoList();
+// Open the standard event dialog with tentative pre-checked so a brand-new
+// "to-do" item lands in the to-do panel immediately after save.
+document.getElementById("todo-add-btn")?.addEventListener("click", () => {
+  openEventDialog(null, null);
+  const t = document.getElementById("event-tentative");
+  if (t) t.checked = true;
 });
 
 document.getElementById("pricing-add-btn")?.addEventListener("click", addPricingLineItem);
