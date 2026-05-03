@@ -2184,13 +2184,33 @@ function parseReservation(text, defaultYear) {
       break;
     }
   }
-  // Fallback: first non-label, non-date, non-address-looking line.
+  // Second preference: a line that contains a known hotel brand (Marriott
+  // confirmations have the venue line — e.g. "Courtyard Mexico City Airport"
+  // — buried under nav links like "ENHANCE YOUR STAY"; brand-matching skips
+  // past those).
+  if (!title) {
+    const lowerLines = lines.map(l => l.toLowerCase());
+    for (let i = 0; i < lines.length; i++) {
+      const ll = lowerLines[i];
+      if (SMART_HOTEL_KEYWORDS.some(k => ll.includes(k))
+          && lines[i].length < 80
+          && !/^(check|confirmation|guest|address|phone|total|room|reservation)/i.test(lines[i])) {
+        title = lines[i];
+        break;
+      }
+    }
+  }
+  // Fallback: first non-label, non-date, non-nav line. We skip short ALL-CAPS
+  // lines because hotel emails open with nav links like "ENHANCE YOUR STAY",
+  // "SUMMARY OF CHARGES", "CONTACT US" that would otherwise win.
   if (!title) {
     for (const line of lines) {
       if (/^(date|confirmation|arrive|arrival|depart|departure|guests?|hotel|address|check[\s-]?in|check[\s-]?out|reservation)/i.test(line)) continue;
       if (dowDateRx.test(line) && line.length < 40) continue;
       if (/^\d/.test(line)) continue;
       if (line.length > 80) continue;
+      // Skip short all-caps nav crumbs.
+      if (line === line.toUpperCase() && line.length < 30 && /^[A-Z][A-Z &|]+[A-Z]$/.test(line)) continue;
       title = line;
       break;
     }
