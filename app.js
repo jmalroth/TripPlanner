@@ -174,7 +174,12 @@ function load() {
   }
 }
 
+// Set when bootstrapping from ?snap=<id> — disables persistence so a viewer
+// browsing a shared snapshot doesn't pollute their localStorage or trip list.
+let SNAPSHOT_VIEW = false;
+
 function save() {
+  if (SNAPSHOT_VIEW) return;
   state.modifiedAt = Date.now();
   state.localDirty = true;
   localStorage.setItem(STORAGE_KEY(), JSON.stringify(state));
@@ -249,6 +254,106 @@ function exportTrip() {
   const ownerUrl = `${location.origin}${location.pathname}?id=${encodeURIComponent(slug)}&k=${token}`;
   const publicUrl = `${location.origin}${location.pathname}?id=${encodeURIComponent(slug)}`;
   showExportLinks({ publicUrl, ownerUrl, slug, token });
+}
+
+// jsonblob.com — anonymous JSON storage. Free, ~256 KB cap, no auth, no
+// signup. Returns a Location header pointing at the new blob.
+const JSONBLOB_API = "https://jsonblob.com/api/jsonBlob";
+
+async function shareSnapshot() {
+  const btn = document.getElementById("share-btn");
+  const origText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Publishing…";
+  try {
+    const blob = stripPricing(state);
+    const res = await fetch(JSONBLOB_API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify(blob),
+    });
+    if (!res.ok) throw new Error(`jsonblob ${res.status}`);
+    const loc = res.headers.get("Location") || "";
+    const id = loc.split("/").pop();
+    if (!id) throw new Error("no blob id returned");
+    const shareUrl = `${location.origin}${location.pathname}?snap=${encodeURIComponent(id)}`;
+    showShareLink(shareUrl);
+  } catch (e) {
+    alert(`Couldn't publish snapshot: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = origText;
+  }
+}
+
+function showShareLink(url) {
+  document.getElementById("export-links")?.remove();
+  const panel = document.createElement("div");
+  panel.id = "export-links";
+  panel.className = "export-links";
+  panel.innerHTML = `
+    <div class="export-links-row">
+      <label>Snapshot link (read-only, no prices)</label>
+      <div class="export-links-input">
+        <input type="text" readonly value="" />
+        <button type="button" data-copy>Copy</button>
+      </div>
+    </div>
+    <div class="export-links-files">
+      Hosted on jsonblob.com — anyone with the link can view this trip as it
+      is right now. Future edits won't update this snapshot; click Share again
+      for a fresh link.
+    </div>
+    <button type="button" class="export-links-close" aria-label="Close">×</button>
+  `;
+  const input = panel.querySelector("input");
+  input.value = url;
+  panel.querySelector("button[data-copy]").addEventListener("click", async () => {
+    const btn = panel.querySelector("button[data-copy]");
+    try {
+      await navigator.clipboard.writeText(url);
+      btn.textContent = "Copied";
+      setTimeout(() => { btn.textContent = "Copy"; }, 1200);
+    } catch (e) {
+      input.select();
+      document.execCommand("copy");
+    }
+  });
+  panel.querySelector(".export-links-close").addEventListener("click", () => panel.remove());
+  document.getElementById("share-btn")?.parentElement?.appendChild(panel);
+  setTimeout(() => {
+    const onDoc = (e) => {
+      if (!panel.contains(e.target) && e.target.id !== "share-btn") {
+        panel.remove();
+        document.removeEventListener("click", onDoc);
+      }
+    };
+    document.addEventListener("click", onDoc);
+  }, 0);
+}
+
+function showSnapshotBanner() {
+  // Hide the topbar action buttons that don't make sense in viewer mode, and
+  // drop a banner so the viewer knows their edits won't stick.
+  ["share-btn", "export-btn", "add-event-btn", "trip-display"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = "none";
+  });
+  const editRow = document.getElementById("trip-edit-row");
+  if (editRow) editRow.hidden = true;
+  const banner = document.createElement("div");
+  banner.className = "snapshot-banner";
+  const name = state.name ? `"${state.name}"` : "this trip";
+  banner.textContent = `Read-only snapshot of ${name}. Any edits stay in your browser only.`;
+  document.body.insertBefore(banner, document.body.firstChild);
+}
+
+async function fetchSnapshot(id) {
+  const res = await fetch(`${JSONBLOB_API}/${encodeURIComponent(id)}`, {
+    headers: { "Accept": "application/json" },
+  });
+  if (!res.ok) throw new Error(`snapshot ${res.status}`);
+  return await res.json();
 }
 
 function showExportLinks({ publicUrl, ownerUrl, slug, token }) {
@@ -1888,6 +1993,7 @@ document.getElementById("tz-aware").addEventListener("change", (e) => {
 });
 document.getElementById("add-event-btn").addEventListener("click", () => openEventDialog(null));
 document.getElementById("export-btn")?.addEventListener("click", exportTrip);
+document.getElementById("share-btn")?.addEventListener("click", shareSnapshot);
 
 // --- flight paste/parser ---
 
@@ -3396,6 +3502,27 @@ document.getElementById("option-range-end").addEventListener("change", (e) => {
 
 async function bootstrap() {
   const params = new URLSearchParams(window.location.search);
+
+  // ?snap=<jsonblob-id> — read-only viewer mode. Fetch the snapshot, populate
+  // state in memory, hide pricing, and short-circuit the normal flow so the
+  // viewer's localStorage and trip list aren't touched.
+  const snapId = params.get("snap");
+  if (snapId) {
+    SNAPSHOT_VIEW = true;
+    try {
+      const blob = await fetchSnapshot(snapId);
+      Object.assign(state, blob);
+      if (!state.options) state.options = [];
+      if (!state.activeView) state.activeView = "main";
+      if (!state.shrunkDays) state.shrunkDays = [];
+      CURRENT_HAS_PRICE_KEY = false;  // snapshots never carry pricing
+      renderApp();
+      showSnapshotBanner();
+    } catch (e) {
+      document.body.innerHTML = `<div style="padding:40px;font:14px system-ui">Couldn't load snapshot: ${e.message}</div>`;
+    }
+    return;
+  }
 
   // One-time migration of any legacy single-trip blob into the registry.
   const migratedId = migrateLegacy();

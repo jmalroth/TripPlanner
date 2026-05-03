@@ -211,6 +211,15 @@ button.ghost {
 }
 .export-links-close:hover { color: var(--text); }
 
+.snapshot-banner {
+  background: #fff7e0;
+  color: #6b4f00;
+  border-bottom: 1px solid #f3d77a;
+  padding: 8px 20px;
+  font-size: 13px;
+  text-align: center;
+}
+
 button.danger {
   background: #b91c1c;
 }
