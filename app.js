@@ -248,14 +248,69 @@ function exportTrip() {
 
   const ownerUrl = `${location.origin}${location.pathname}?id=${encodeURIComponent(slug)}&k=${token}`;
   const publicUrl = `${location.origin}${location.pathname}?id=${encodeURIComponent(slug)}`;
-  const tripName = state.name || slug;
-  const text =
-    `${tripName}\n` +
-    `Public: ${publicUrl}\n` +
-    `Owner (with prices): ${ownerUrl}`;
-  // Google Voice deeplink — opens GV in a new tab pre-filled, user hits Send.
-  const gvUrl = `https://voice.google.com/u/0/?action=sms&phone=${encodeURIComponent("+17629301525")}&text=${encodeURIComponent(text)}`;
-  window.open(gvUrl, "_blank", "noopener");
+  showExportLinks({ publicUrl, ownerUrl, slug, token });
+}
+
+function showExportLinks({ publicUrl, ownerUrl, slug, token }) {
+  document.getElementById("export-links")?.remove();
+  const panel = document.createElement("div");
+  panel.id = "export-links";
+  panel.className = "export-links";
+  panel.innerHTML = `
+    <div class="export-links-row">
+      <label>Public link (no prices)</label>
+      <div class="export-links-input">
+        <input type="text" readonly value="" data-url="public" />
+        <button type="button" data-copy="public">Copy</button>
+      </div>
+    </div>
+    <div class="export-links-row">
+      <label>Owner link (with prices)</label>
+      <div class="export-links-input">
+        <input type="text" readonly value="" data-url="owner" />
+        <button type="button" data-copy="owner">Copy</button>
+      </div>
+    </div>
+    <div class="export-links-files">
+      Files downloaded: <code></code> + <code></code> — commit to <code>data/</code> to publish.
+    </div>
+    <button type="button" class="export-links-close" aria-label="Close">×</button>
+  `;
+  panel.querySelector('input[data-url=public]').value = publicUrl;
+  panel.querySelector('input[data-url=owner]').value = ownerUrl;
+  const codes = panel.querySelectorAll('.export-links-files code');
+  codes[0].textContent = `${slug}.json`;
+  codes[1].textContent = `${slug}-prices-${token}.json`;
+  panel.querySelectorAll('button[data-copy]').forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const which = btn.dataset.copy;
+      const url = which === "public" ? publicUrl : ownerUrl;
+      try {
+        await navigator.clipboard.writeText(url);
+        const orig = btn.textContent;
+        btn.textContent = "Copied";
+        setTimeout(() => { btn.textContent = orig; }, 1200);
+      } catch (e) {
+        const input = panel.querySelector(`input[data-url=${which}]`);
+        input.select();
+        document.execCommand("copy");
+      }
+    });
+  });
+  panel.querySelector(".export-links-close").addEventListener("click", () => panel.remove());
+  // Position the panel just below the Export button.
+  const btn = document.getElementById("export-btn");
+  btn?.parentElement?.appendChild(panel);
+  // Close on outside click (next tick so the click that opened doesn't catch it).
+  setTimeout(() => {
+    const onDoc = (e) => {
+      if (!panel.contains(e.target) && e.target !== btn) {
+        panel.remove();
+        document.removeEventListener("click", onDoc);
+      }
+    };
+    document.addEventListener("click", onDoc);
+  }, 0);
 }
 
 function seed() {

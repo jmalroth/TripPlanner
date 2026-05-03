@@ -168,6 +168,49 @@ button.ghost {
   color: var(--accent);
 }
 
+.actions { position: relative; }
+.export-links {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 420px;
+  max-width: 92vw;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.12);
+  padding: 14px 16px 12px;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.export-links-row { display: flex; flex-direction: column; gap: 4px; }
+.export-links-row label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.export-links-input { display: flex; gap: 6px; }
+.export-links-input input {
+  flex: 1; min-width: 0;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px; padding: 6px 8px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px;
+  color: var(--text);
+}
+.export-links-input button {
+  background: var(--accent); color: #fff; border: none;
+  padding: 6px 12px; border-radius: 4px; font-size: 12px; cursor: pointer;
+}
+.export-links-files { font-size: 11px; color: var(--muted); }
+.export-links-files code {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  background: var(--panel-2); padding: 1px 5px; border-radius: 3px; color: var(--text);
+}
+.export-links-close {
+  position: absolute; top: 6px; right: 8px;
+  background: transparent; border: none; color: var(--muted);
+  font-size: 18px; line-height: 1; cursor: pointer; padding: 2px 6px;
+}
+.export-links-close:hover { color: var(--text); }
+
 button.danger {
   background: #b91c1c;
 }
