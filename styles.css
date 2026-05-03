@@ -596,6 +596,13 @@ main {
 
 .hint { color: var(--muted); font-size: 12px; }
 
+.panel-head-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .segment-controls label {
   color: var(--muted);
   font-size: 12px;

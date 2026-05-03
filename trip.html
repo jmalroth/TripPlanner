@@ -24,11 +24,6 @@
       <span id="trip-length" class="trip-length"></span>
     </div>
     <div class="actions">
-      <label class="toggle">
-        <input id="tz-aware" type="checkbox" />
-        <span>Follow timezone</span>
-      </label>
-      <button id="add-event-btn" type="button">+ Add event</button>
       <button id="share-btn" type="button" class="ghost" title="Copy a link to share this trip read-only">Share</button>
       <span id="sync-indicator" class="sync-indicator"></span>
     </div>
@@ -46,6 +41,13 @@
         <div class="panel-head">
           <h2>Whole trip</h2>
           <span class="hint">Overview — entire trip on one row</span>
+          <div class="panel-head-actions">
+            <label class="toggle">
+              <input id="tz-aware" type="checkbox" />
+              <span>Follow timezone</span>
+            </label>
+            <button id="add-event-btn" type="button">+ Add event</button>
+          </div>
         </div>
         <div id="overview" class="timeline overview"></div>
       </section>
