@@ -878,8 +878,16 @@ main {
 .pricing-line-items .li-breakdown { font-size: 12px; color: var(--muted); margin-top: 2px; }
 .pricing-line-items .li-label-row { display: flex; gap: 10px; align-items: baseline; }
 .pricing-line-items .li-date { color: var(--muted); font-size: 12px; font-weight: normal; }
-.pricing-line-items .li-right { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: flex-end; margin-left: auto; }
-.pricing-line-items .li-right .li-cost { margin-left: 6px; }
+.pricing-line-items .li-right {
+  display: grid;
+  grid-template-columns: repeat(var(--group-count, 1), minmax(120px, max-content)) auto;
+  gap: 6px;
+  align-items: center;
+  margin-left: auto;
+}
+.pricing-line-items .li-right .group-pill { justify-self: end; }
+.pricing-line-items .li-right .group-pill.empty { visibility: hidden; padding: 2px 8px; }
+.pricing-line-items .li-right .li-cost { margin-left: 12px; }
 
 .group-pill {
   display: inline-flex; align-items: center;

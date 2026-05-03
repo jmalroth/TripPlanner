@@ -814,23 +814,31 @@ function renderPricingLineItems() {
       evList.className = "li-events";
       if (li.label) evList.textContent = eventTitles.join(" · ");
       if (li.label) main.appendChild(evList);
-      // Per-group amount pills + total cost — all right-aligned together.
+      // Per-group amount pills + total cost laid out in a grid so pills align
+      // vertically across line items (one column per default-split group plus
+      // a column for the total).
       ensurePriceSplit();
       const right = document.createElement("div");
       right.className = "li-right";
+      right.style.setProperty("--group-count", state.priceSplit.groups.length);
       state.priceSplit.groups.forEach((g, idx) => {
         const amt = lineItemGroupAmount(li, g.id, idx);
-        if (!amt) return;
         const isOverridden = li.overrides && li.overrides[g.id] != null;
         const pill = document.createElement("span");
         pill.className = `group-pill outline-${g.color || "indigo"}` + (isOverridden ? " overridden" : "");
-        pill.textContent = `${g.name}: ${fmtMoney(amt)}`;
-        if (isOverridden) pill.title = "Overridden (default would be " +
-          fmtMoney((li.total || 0) * (g.share || 0)) + ")";
+        pill.style.gridColumn = idx + 1;
+        if (amt) {
+          pill.textContent = `${g.name}: ${fmtMoney(amt)}`;
+          if (isOverridden) pill.title = "Overridden (default would be " +
+            fmtMoney((li.total || 0) * (g.share || 0)) + ")";
+        } else {
+          pill.classList.add("empty");
+        }
         right.appendChild(pill);
       });
       const cost = document.createElement("span");
       cost.className = "li-cost";
+      cost.style.gridColumn = state.priceSplit.groups.length + 1;
       cost.textContent = fmtMoney(lineItemTotal(li));
       right.appendChild(cost);
       const actions = document.createElement("div");
