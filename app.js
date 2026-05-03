@@ -536,6 +536,15 @@ function renderTimeline(container, rangeStart, rangeEnd, opts) {
         leftFrac = utcToFrac(sUtc, dayUtcBounds);
         rightFrac = utcToFrac(eUtc, dayUtcBounds);
       }
+      // Lodging without explicit times defaults to 3pm check-in / 11am
+      // check-out so hotel bars don't visually consume the full first/last
+      // day on the timeline. Doesn't change the underlying data. Only
+      // applies to multi-day stays — same-day entries keep the full-day
+      // bar so they remain visible.
+      if (ev.lane === "lodging" && !ev.startTime && !ev.endTime && ev.start !== ev.end) {
+        leftFrac = Math.floor(leftFrac) + 15 / 24;
+        rightFrac = Math.floor(rightFrac) - 1 + 11 / 24;
+      }
       leftFrac = Math.max(0, leftFrac);
       rightFrac = Math.min(totalDays, rightFrac);
       if (rightFrac <= leftFrac) continue;
