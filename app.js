@@ -258,7 +258,7 @@ function exportTrip() {
 
 // Cloudflare Worker that stores trip snapshots in KV. See worker/README.md
 // for one-time setup; replace the placeholder below with your deployed URL.
-const SNAPSHOT_API = "https://trip-snapshots.REPLACE_WITH_YOUR_ACCOUNT.workers.dev";
+const SNAPSHOT_API = "https://trip-snapshots.daner1231.workers.dev";
 
 async function shareSnapshot() {
   const btn = document.getElementById("share-btn");
