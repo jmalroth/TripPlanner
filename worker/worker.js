@@ -26,7 +26,7 @@ const SNAP_ID_RE = /^[0-9a-f]{8,64}$/;
 const TRIP_PREFIX = "trip:";
 const SNAP_PREFIX = "snap:";
 
-const PRICING_KEYS = ["lineItems", "priceSplit", "priceToken"];
+const PRICING_KEYS = ["lineItems", "priceSplit", "priceToken", "viewerToken"];
 
 function newId() {
   const bytes = new Uint8Array(12);
@@ -96,7 +96,14 @@ export default {
         const value = await env.SNAPSHOTS.get(key);
         if (value == null) return json({ error: "not found" }, { status: 404 });
         const parsed = JSON.parse(value);
-        return json(owner ? parsed : stripPricing(parsed));
+        if (owner) return json(parsed);
+        // ?v=<token> grants pricing-read access (read-only) if it matches the
+        // viewerToken stored on the trip.
+        const supplied = url.searchParams.get("v");
+        if (supplied && parsed.viewerToken && supplied === parsed.viewerToken) {
+          return json(parsed);
+        }
+        return json(stripPricing(parsed));
       }
 
       if (req.method === "PUT") {
