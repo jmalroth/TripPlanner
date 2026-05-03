@@ -11,9 +11,16 @@
   <header class="topbar">
     <div class="trip-meta">
       <a href="./" class="back-link" title="All trips">← Trips</a>
-      <input id="trip-name" type="text" placeholder="Trip name" />
-      <label>Start <input id="trip-start" type="date" /></label>
-      <label>End <input id="trip-end" type="date" /></label>
+      <button id="trip-display" type="button" class="trip-display" title="Click to edit name and dates">
+        <span id="trip-display-name">Untitled trip</span>
+        <span id="trip-display-dates" class="trip-display-dates"></span>
+      </button>
+      <div id="trip-edit-row" class="trip-edit-row" hidden>
+        <input id="trip-name" type="text" placeholder="Trip name" />
+        <label>Start <input id="trip-start" type="date" /></label>
+        <label>End <input id="trip-end" type="date" /></label>
+        <button id="trip-edit-done" type="button" class="ghost">Done</button>
+      </div>
       <span id="trip-length" class="trip-length"></span>
     </div>
     <div class="actions">

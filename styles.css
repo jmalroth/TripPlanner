@@ -7,6 +7,19 @@
 }
 .back-link:hover { color: var(--accent); }
 
+.trip-display {
+  display: inline-flex; align-items: baseline; gap: 12px;
+  background: transparent; border: none; padding: 4px 8px;
+  border-radius: 6px; cursor: pointer; text-align: left;
+  font-family: inherit;
+}
+.trip-display:hover { background: var(--panel-2); }
+.trip-display #trip-display-name { font-size: 18px; font-weight: 700; color: var(--text); }
+.trip-display .trip-display-dates { font-size: 13px; color: var(--muted); }
+.trip-edit-row { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.trip-edit-row .ghost { background: transparent; border: 1px solid var(--line); padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+.trip-edit-row .ghost:hover { border-color: var(--accent); color: var(--accent); }
+
 :root {
   --bg: #ffffff;
   --panel: #ffffff;

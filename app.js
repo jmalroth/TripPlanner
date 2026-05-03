@@ -1648,6 +1648,19 @@ document.getElementById("event-delete").addEventListener("click", () => {
 
 // --- top bar wiring ---
 
+// Click-to-edit toggle for the trip name + dates header.
+document.getElementById("trip-display")?.addEventListener("click", () => {
+  document.getElementById("trip-display").hidden = true;
+  document.getElementById("trip-edit-row").hidden = false;
+  document.getElementById("trip-name").focus();
+  document.getElementById("trip-name").select();
+});
+document.getElementById("trip-edit-done")?.addEventListener("click", () => {
+  document.getElementById("trip-edit-row").hidden = true;
+  document.getElementById("trip-display").hidden = false;
+  renderApp();
+});
+
 document.getElementById("trip-name").addEventListener("input", (e) => {
   state.name = e.target.value;
   save();
@@ -2955,6 +2968,21 @@ function renderApp() {
   document.getElementById("trip-start").value = state.start || "";
   document.getElementById("trip-end").value = state.end || "";
   document.getElementById("tz-aware").checked = !!state.tzAware;
+  // Refresh the click-to-edit display row.
+  const displayName = document.getElementById("trip-display-name");
+  const displayDates = document.getElementById("trip-display-dates");
+  if (displayName) displayName.textContent = state.name || "Untitled trip";
+  if (displayDates) {
+    if (state.start && state.end) {
+      const fmt = d => {
+        const [y, m, da] = d.split("-").map(Number);
+        return new Date(y, m - 1, da).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+      };
+      displayDates.textContent = `${fmt(state.start)} – ${fmt(state.end)}`;
+    } else {
+      displayDates.textContent = "Set dates";
+    }
+  }
 
   // Tab buttons & panel visibility
   document.querySelectorAll(".tab-btn").forEach(b => {
