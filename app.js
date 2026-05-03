@@ -544,8 +544,9 @@ function renderTimeline(container, rangeStart, rangeEnd, opts) {
         const endDay = Math.floor(rightFrac);
         leftFrac = startDay + 15 / 24;
         if (ev.start === ev.end) {
-          // Single-day entry — render evening (3pm → midnight).
-          rightFrac = startDay + 1;
+          // Single-day entry implies a 1-night stay — bar extends past the
+          // start day into the next day until 11am check-out.
+          rightFrac = startDay + 1 + 11 / 24;
         } else {
           rightFrac = endDay - 1 + 11 / 24;
         }
