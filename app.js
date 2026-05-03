@@ -302,9 +302,8 @@ function showShareLink(url) {
       </div>
     </div>
     <div class="export-links-files">
-      Hosted on jsonblob.com — anyone with the link can view this trip as it
-      is right now. Future edits won't update this snapshot; click Share again
-      for a fresh link.
+      Anyone with the link can view this trip as it is right now. Future
+      edits won't update this snapshot — click Share again for a fresh link.
     </div>
     <button type="button" class="export-links-close" aria-label="Close">×</button>
   `;
