@@ -759,29 +759,44 @@ function renderPricingLineItems() {
   for (const lane of LANE_ORDER) {
     const items = byLane[lane];
     if (!items || items.length === 0) continue;
-    const group = document.createElement("div");
+    // <details> so the user can click the lane header to collapse the rows.
+    const group = document.createElement("details");
     group.className = "pricing-group";
+    group.open = true;
     const subtotal = items.reduce((s, li) => s + lineItemTotal(li), 0);
     // Per-group subtotal for this lane (matches the right-side pills layout).
     const lanePerGroup = state.priceSplit.groups.map((g, gi) =>
       items.reduce((s, li) => s + lineItemGroupAmount(li, g.id, gi), 0));
-    const h = document.createElement("h3");
+    const h = document.createElement("summary");
+    h.className = "pricing-group-head";
     const labelSpan = document.createElement("span");
+    labelSpan.className = "pricing-group-label";
     labelSpan.textContent = LANE_LABEL[lane] || lane;
     h.appendChild(labelSpan);
+    // Right-side area uses the SAME grid template as line items so pills
+    // + total + (no actions) line up vertically across header and rows.
     const right = document.createElement("span");
-    right.className = "lane-subtotal-row";
+    right.className = "lane-subtotal-row li-right";
+    right.style.setProperty("--group-count", state.priceSplit.groups.length);
     state.priceSplit.groups.forEach((g, gi) => {
-      if (!lanePerGroup[gi]) return;
+      const amt = lanePerGroup[gi];
       const pill = document.createElement("span");
       pill.className = `group-pill outline-${g.color || "indigo"}`;
-      pill.textContent = `${g.name}: ${fmtMoney(lanePerGroup[gi])}`;
+      pill.style.gridColumn = gi + 1;
+      if (amt) pill.textContent = `${g.name}: ${fmtMoney(amt)}`;
+      else pill.classList.add("empty");
       right.appendChild(pill);
     });
     const subTot = document.createElement("span");
-    subTot.className = "group-total";
+    subTot.className = "group-total li-cost";
+    subTot.style.gridColumn = state.priceSplit.groups.length + 1;
     subTot.textContent = fmtMoney(subtotal);
     right.appendChild(subTot);
+    // Empty placeholder for the actions column so totals line up with rows.
+    const actionsSpacer = document.createElement("span");
+    actionsSpacer.className = "li-actions actions-spacer";
+    actionsSpacer.style.gridColumn = state.priceSplit.groups.length + 2;
+    right.appendChild(actionsSpacer);
     h.appendChild(right);
     group.appendChild(h);
     // Sort items chronologically by their earliest event start date.

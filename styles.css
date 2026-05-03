@@ -915,8 +915,14 @@ main {
 .pricing-summary-groups { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-right: 8px; }
 .pricing-summary-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: flex-end; width: 100%; }
 .pricing-summary-total { font-weight: 600; font-size: 18px; color: var(--accent); margin-left: 8px; }
-.pricing-line-items .pricing-group h3 { display: flex; align-items: center; gap: 8px; }
-.pricing-line-items .pricing-group .lane-subtotal-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-left: auto; }
+.pricing-line-items details.pricing-group > summary { list-style: none; cursor: pointer; }
+.pricing-line-items details.pricing-group > summary::-webkit-details-marker { display: none; }
+.pricing-line-items details.pricing-group > summary { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+.pricing-line-items details.pricing-group > summary::before { content: "▾"; color: var(--muted); font-size: 12px; }
+.pricing-line-items details.pricing-group:not([open]) > summary::before { content: "▸"; }
+.pricing-line-items .pricing-group-label { font-size: 14px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 600; }
+.pricing-line-items .lane-subtotal-row { margin-left: auto; }
+.pricing-line-items .actions-spacer { visibility: hidden; }
 
 .pricing-summary { display: flex; gap: 24px; padding: 12px 16px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 14px; flex-wrap: wrap; }
 .pricing-summary-tile { display: flex; flex-direction: column; gap: 2px; }
