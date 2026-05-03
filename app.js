@@ -2711,6 +2711,92 @@ function consumeDate(text, defaultYear) {
   return null;
 }
 
+// Parse Google Flights' compact paste format — the one you get from the
+// search results card or "Booking summary" view:
+//   Seattle (SEA) to Sao Paulo (GRU)
+//   Wed, Aug 13 · 7:20 AM - Thu, Aug 14 · 7:30 AM
+//   1 stop · 20h 10m · Business
+//   Aeromexico · AM495, AM14
+//
+//   Sao Paulo (GRU) to Seattle (SEA)
+//   ...
+// Returns one event per leg. parseFlights handles the more verbose Google
+// Flights "itinerary detail" view; this one handles the compact card view
+// that the longer parser doesn't recognize.
+function parseGoogleFlightsCompact(text, defaultYear) {
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const events = [];
+  const monthMap = {
+    jan:1, feb:2, mar:3, apr:4, may:5, jun:6, jul:7, aug:8, sep:9, oct:10, nov:11, dec:12,
+  };
+
+  // "Seattle (SEA) to Sao Paulo (GRU)" — capture both codes.
+  const routeRx = /^(.+?)\s*\(([A-Z]{3})\)\s+(?:to|→|-)\s*(.+?)\s*\(([A-Z]{3})\)\s*$/;
+  // "Wed, Aug 13 · 7:20 AM - Thu, Aug 14 · 7:30 AM"
+  const dtRx = /^(?:[A-Za-z]+,\s*)?([A-Za-z]{3,9})\s+(\d{1,2})(?:,?\s+(\d{4}))?\s*[·•|]\s*(\d{1,2}:\d{2})\s*(AM|PM)\s*[-–]\s*(?:[A-Za-z]+,\s*)?([A-Za-z]{3,9})\s+(\d{1,2})(?:,?\s+(\d{4}))?\s*[·•|]\s*(\d{1,2}:\d{2})\s*(AM|PM)\s*$/i;
+  // "Aeromexico · AM495, AM14"  or  "Aeromexico · LH 493"  etc.
+  const airlineRx = /^([A-Za-z][A-Za-z &.-]+?)\s*[·•|]\s*((?:[A-Z]{2}\s?\d{1,4})(?:\s*,\s*(?:[A-Z]{2}\s?\d{1,4}))*)\s*$/;
+
+  for (let i = 0; i < lines.length - 1; i++) {
+    const route = lines[i].match(routeRx);
+    if (!route) continue;
+    const dt = lines[i + 1].match(dtRx);
+    if (!dt) continue;
+
+    const startMo = monthMap[dt[1].slice(0, 3).toLowerCase()];
+    const endMo = monthMap[dt[6].slice(0, 3).toLowerCase()];
+    if (!startMo || !endMo) continue;
+    const startYear = dt[3] ? +dt[3] : defaultYear;
+    const endYear = dt[8] ? +dt[8] : defaultYear;
+    const startDate = `${startYear}-${String(startMo).padStart(2,"0")}-${String(+dt[2]).padStart(2,"0")}`;
+    const endDate = `${endYear}-${String(endMo).padStart(2,"0")}-${String(+dt[7]).padStart(2,"0")}`;
+    const startTime = to24h(dt[4], dt[5]);
+    const endTime = to24h(dt[9], dt[10]);
+
+    // Optional "stops · duration · cabin" line — skip it.
+    let detailsIdx = i + 2;
+    let cabin = null, duration = null;
+    if (detailsIdx < lines.length) {
+      const det = lines[detailsIdx];
+      const detM = det.match(/(?:(\d+\s*stops?|nonstop)\s*[·•|]\s*)?(\d+\s*hr(?:\s*\d+\s*min)?|\d+h\s*\d+m)\s*[·•|]\s*([A-Za-z][A-Za-z ]+)/i);
+      if (detM) {
+        duration = detM[2];
+        cabin = detM[3].trim();
+        detailsIdx++;
+      }
+    }
+
+    // Optional airline + flight numbers line — flight-num combo becomes title prefix.
+    let flightNums = null, airline = null;
+    if (detailsIdx < lines.length) {
+      const al = lines[detailsIdx].match(airlineRx);
+      if (al) {
+        airline = al[1].trim();
+        flightNums = al[2].replace(/\s+/g, "").replace(/,/g, "+");
+      }
+    }
+
+    const title = flightNums
+      ? `${flightNums} ${route[2]} → ${route[4]}`
+      : `${route[2]} → ${route[4]}`;
+    const notes = [airline, cabin, duration].filter(Boolean).join(" · ") || "Auto-detected from paste";
+
+    events.push({
+      id: uid(),
+      title,
+      lane: "flights",
+      color: "indigo",
+      start: startDate, startTime,
+      startTz: AIRPORT_TZ[route[2]] || "UTC",
+      end: endDate, endTime,
+      endTz: AIRPORT_TZ[route[4]] || "UTC",
+      notes,
+    });
+  }
+
+  return events.length ? events : null;
+}
+
 function parseFlights(text, defaultYear) {
   const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
   const events = [];
@@ -3402,6 +3488,7 @@ function wirePasteBlock({ inputId, parseId, clearId, statusId, targetId }) {
     if (noMatch(events)) events = parseCruise(text, defaultYear);
     if (noMatch(events)) events = parseReservation(text, defaultYear);
     if (noMatch(events)) events = parseDeltaItinerary(text, defaultYear);
+    if (noMatch(events)) events = parseGoogleFlightsCompact(text, defaultYear);
     if (noMatch(events)) events = parseFlights(text, defaultYear);
     // parseLooseEvent handles short single-line natural language; parseSmart
     // is the catch-all for free-form messy pastes when nothing else matched.
