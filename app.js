@@ -654,10 +654,28 @@ function eventToLineItem(eventId) {
 
 function renderPricing() {
   ensureLineItems();
+  ensurePriceSplit();
+  // Auto-prune deleted events from every line item — stops "(deleted)"
+  // labels lingering after an event was removed and re-added (re-add gets
+  // a new id, so the old id stays orphaned in the bundle).
+  const validIds = new Set(state.events.map(e => e.id));
+  for (const li of state.lineItems) {
+    li.eventIds = li.eventIds.filter(eid => validIds.has(eid));
+  }
+  renderSplitEditor();
   renderPricingPills();
   renderPricingLineItems();
   renderPricingSummary();
-  renderPricingPartiesForm();
+  renderLineItemForm();
+}
+
+function lineItemEarliestDate(li) {
+  let best = null;
+  for (const id of li.eventIds) {
+    const ev = state.events.find(e => e.id === id);
+    if (ev && ev.start && (!best || ev.start < best)) best = ev.start;
+  }
+  return best;
 }
 
 function renderPricingPills() {
@@ -728,29 +746,51 @@ function renderPricingLineItems() {
     h.querySelector("span").textContent = LANE_LABEL[lane] || lane;
     h.querySelector(".group-total").textContent = fmtMoney(subtotal);
     group.appendChild(h);
+    // Sort items chronologically by their earliest event start date.
+    items.sort((a, b) => {
+      const da = lineItemEarliestDate(a) || "9999-12-31";
+      const db = lineItemEarliestDate(b) || "9999-12-31";
+      return da.localeCompare(db);
+    });
     const ul = document.createElement("ul");
     for (const li of items) {
       const liEl = document.createElement("li");
       const main = document.createElement("div");
       main.className = "li-main";
-      const label = document.createElement("div");
+      const labelRow = document.createElement("div");
+      labelRow.className = "li-label-row";
+      const label = document.createElement("span");
       label.className = "li-label";
-      const eventTitles = li.eventIds.map(id => state.events.find(e => e.id === id)?.title || "(deleted)");
-      label.textContent = li.label || eventTitles.join(" + ");
+      const eventTitles = li.eventIds.map(id => state.events.find(e => e.id === id)?.title).filter(Boolean);
+      label.textContent = li.label || eventTitles.join(" + ") || "(empty bundle)";
+      labelRow.appendChild(label);
+      const date = lineItemEarliestDate(li);
+      if (date) {
+        const dateEl = document.createElement("span");
+        dateEl.className = "li-date";
+        dateEl.textContent = date;
+        labelRow.appendChild(dateEl);
+      }
+      main.appendChild(labelRow);
       const evList = document.createElement("div");
       evList.className = "li-events";
       if (li.label) evList.textContent = eventTitles.join(" · ");
-      main.appendChild(label);
       if (li.label) main.appendChild(evList);
-      // If multiple parties, show breakdown above the total.
-      if (li.pricing && Array.isArray(li.pricing.parties) && li.pricing.parties.length > 1) {
-        const breakdown = document.createElement("div");
-        breakdown.className = "li-breakdown";
-        breakdown.textContent = li.pricing.parties
-          .map(p => `${p.name}: ${fmtMoney(partyAmount(p))}`)
-          .join(" · ");
-        main.appendChild(breakdown);
-      }
+      // Per-group amount pills.
+      ensurePriceSplit();
+      const pills = document.createElement("div");
+      pills.className = "li-group-pills";
+      state.priceSplit.groups.forEach((g, idx) => {
+        const amt = lineItemGroupAmount(li, g.id, idx);
+        const isOverridden = li.overrides && li.overrides[g.id] != null;
+        const pill = document.createElement("span");
+        pill.className = `group-pill bg-${g.color || "indigo"}` + (isOverridden ? " overridden" : "");
+        pill.textContent = `${g.name}: ${fmtMoney(amt)}`;
+        if (isOverridden) pill.title = "Overridden (default would be " +
+          fmtMoney((li.total || 0) * (g.share || 0)) + ")";
+        pills.appendChild(pill);
+      });
+      main.appendChild(pills);
       const cost = document.createElement("div");
       cost.className = "li-cost";
       cost.textContent = fmtMoney(lineItemTotal(li));
@@ -787,16 +827,29 @@ function renderPricingSummary() {
   const container = document.getElementById("pricing-summary");
   if (!container) return;
   ensureLineItems();
-  let booked = 0, tentativeTotal = 0, mineTotal = 0, othersTotal = 0;
+  ensurePriceSplit();
+  let booked = 0, tentativeTotal = 0;
+  const perGroup = state.priceSplit.groups.map(() => 0);
   for (const li of state.lineItems) {
     const total = lineItemTotal(li);
     const isTent = li.eventIds.some(id => state.events.find(e => e.id === id)?.tentative);
     if (isTent) tentativeTotal += total;
     else booked += total;
-    mineTotal += lineItemMineTotal(li);
-    othersTotal += lineItemOthersTotal(li);
+    state.priceSplit.groups.forEach((g, idx) => {
+      perGroup[idx] += lineItemGroupAmount(li, g.id, idx);
+    });
   }
   container.innerHTML = "";
+  // Group pills first (one per default-split group), then booked/tentative/total tiles.
+  const groupRow = document.createElement("div");
+  groupRow.className = "pricing-summary-groups";
+  state.priceSplit.groups.forEach((g, idx) => {
+    const pill = document.createElement("span");
+    pill.className = `group-pill summary-pill bg-${g.color || "indigo"}`;
+    pill.textContent = `${g.name}: ${fmtMoney(perGroup[idx])}`;
+    groupRow.appendChild(pill);
+  });
+  container.appendChild(groupRow);
   function tile(label, value, cls = "") {
     const t = document.createElement("div");
     t.className = "pricing-summary-tile " + cls;
@@ -805,11 +858,9 @@ function renderPricingSummary() {
     t.querySelector(".value").textContent = value;
     return t;
   }
-  container.appendChild(tile("Mine", fmtMoney(mineTotal), "total"));
-  if (othersTotal > 0) container.appendChild(tile("Others", fmtMoney(othersTotal)));
   container.appendChild(tile("Booked", fmtMoney(booked)));
   container.appendChild(tile("Tentative", fmtMoney(tentativeTotal)));
-  container.appendChild(tile("Grand total", fmtMoney(booked + tentativeTotal)));
+  container.appendChild(tile("Grand total", fmtMoney(booked + tentativeTotal), "total"));
 }
 
 // ID of the line item currently being edited (null = adding new).
@@ -818,25 +869,26 @@ let editingLineItemId = null;
 function editLineItem(id) {
   const li = state.lineItems.find(x => x.id === id);
   if (!li) return;
+  ensurePriceSplit();
   editingLineItemId = id;
-  // Pull line item back into the form so any field can be changed.
+  // Prune deleted events from the bundle while we're here.
+  const validIds = new Set(state.events.map(e => e.id));
+  li.eventIds = li.eventIds.filter(eid => validIds.has(eid));
   pricingSelection.clear();
   li.eventIds.forEach(eid => pricingSelection.add(eid));
   document.getElementById("pricing-label").value = li.label || "";
-  formParties.length = 0;
-  if (li.pricing && Array.isArray(li.pricing.parties) && li.pricing.parties.length > 0) {
-    li.pricing.parties.forEach(p => formParties.push({ name: p.name, input: p.input }));
-  } else {
-    // Legacy {cost: N} item — load it as a single "Mine" party.
-    formParties.push({ name: "Mine", input: String(li.cost || 0) });
+  // Load total — convert from legacy shapes if needed.
+  formTotalInput = String(lineItemTotal(li) || "");
+  // Load overrides.
+  for (const k of Object.keys(formOverrides)) delete formOverrides[k];
+  if (li.overrides) {
+    for (const [k, v] of Object.entries(li.overrides)) formOverrides[k] = String(v);
   }
-  // Update the action button label/visibility.
   const addBtn = document.getElementById("pricing-add-btn");
   if (addBtn) addBtn.textContent = "Save changes";
   const cancelBtn = document.getElementById("pricing-cancel-edit");
   if (cancelBtn) cancelBtn.hidden = false;
   renderPricing();
-  // Scroll the form into view.
   document.querySelector(".pricing-builder")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
@@ -844,8 +896,8 @@ function cancelLineItemEdit() {
   editingLineItemId = null;
   pricingSelection.clear();
   document.getElementById("pricing-label").value = "";
-  formParties.length = 0;
-  formParties.push({ name: "Mine", input: "" });
+  formTotalInput = "";
+  for (const k of Object.keys(formOverrides)) delete formOverrides[k];
   const addBtn = document.getElementById("pricing-add-btn");
   if (addBtn) addBtn.textContent = "+ Add line item";
   const cancelBtn = document.getElementById("pricing-cancel-edit");
@@ -874,93 +926,204 @@ function parseAmount(str) {
   } catch (e) { return NaN; }
 }
 
-const DEFAULT_PARTIES = [{ name: "Mine", input: "" }];
-const formParties = []; // working state for the add form
+// --- price split (trip-level default) ---
+function ensurePriceSplit() {
+  if (!state.priceSplit || !Array.isArray(state.priceSplit.groups) || state.priceSplit.groups.length === 0) {
+    // Seed from any group names already used in legacy line items so the
+    // user's previous parties become the default split automatically.
+    const names = new Set();
+    for (const li of (state.lineItems || [])) {
+      const parties = li.pricing?.parties || [];
+      parties.forEach(p => p.name && names.add(p.name));
+    }
+    if (!names.has("Mine")) names.add("Mine");
+    const list = ["Mine", ...[...names].filter(n => n !== "Mine")];
+    const equal = (1 / list.length);
+    const palette = ["indigo", "rose", "emerald", "amber"];
+    state.priceSplit = {
+      groups: list.map((name, i) => ({
+        id: "g" + (i + 1),
+        name,
+        color: palette[i % palette.length],
+        shareInput: list.length === 1 ? "100%" : `1/${list.length}`,
+        share: equal,
+      })),
+    };
+  } else {
+    const palette = ["indigo", "rose", "emerald", "amber"];
+    for (let i = 0; i < state.priceSplit.groups.length; i++) {
+      const g = state.priceSplit.groups[i];
+      const v = parseAmount(g.shareInput);
+      g.share = isNaN(v) ? 0 : v;
+      if (!g.color) g.color = palette[i % palette.length];
+    }
+  }
+}
 
 function partyAmount(p) {
   return parseAmount(p.input) || 0;
 }
 function lineItemTotal(li) {
+  // New shape: explicit total. Legacy: parties summed, or cost.
+  if (li.total != null) return Number(li.total) || 0;
   if (li.pricing && Array.isArray(li.pricing.parties)) {
     return li.pricing.parties.reduce((s, p) => s + partyAmount(p), 0);
   }
   return Number(li.cost) || 0;
 }
-function lineItemMineTotal(li) {
-  if (li.pricing && Array.isArray(li.pricing.parties) && li.pricing.parties.length > 0) {
-    return partyAmount(li.pricing.parties[0]);
+function lineItemGroupAmount(li, groupId, groupIdx) {
+  // Override wins.
+  if (li.overrides && li.overrides[groupId] != null) {
+    const v = parseAmount(li.overrides[groupId]);
+    return isNaN(v) ? 0 : v;
   }
-  return Number(li.cost) || 0;
-}
-function lineItemOthersTotal(li) {
+  // New shape: total × group.share.
+  if (li.total != null) {
+    const grp = state.priceSplit.groups.find(g => g.id === groupId);
+    return (li.total || 0) * (grp?.share || 0);
+  }
+  // Legacy parties model: amount stored per party; map by index.
   if (li.pricing && Array.isArray(li.pricing.parties)) {
-    return li.pricing.parties.slice(1).reduce((s, p) => s + partyAmount(p), 0);
+    return partyAmount(li.pricing.parties[groupIdx] || {});
   }
+  // Legacy cost — count entirely toward the first group.
+  if (li.cost != null) return groupIdx === 0 ? (Number(li.cost) || 0) : 0;
   return 0;
 }
+function lineItemMineTotal(li) {
+  ensurePriceSplit();
+  return lineItemGroupAmount(li, state.priceSplit.groups[0].id, 0);
+}
+function lineItemOthersTotal(li) {
+  ensurePriceSplit();
+  return state.priceSplit.groups.slice(1).reduce((s, g, i) =>
+    s + lineItemGroupAmount(li, g.id, i + 1), 0);
+}
 
-function renderPricingPartiesForm() {
-  const container = document.getElementById("pricing-parties");
+// Working state for the add/edit line-item form.
+let formTotalInput = "";
+const formOverrides = {}; // { groupId: input string }
+
+function renderSplitEditor() {
+  ensurePriceSplit();
+  const container = document.getElementById("pricing-split-rows");
   if (!container) return;
   container.innerHTML = "";
-  if (formParties.length === 0) formParties.push({ name: "Mine", input: "" });
-  formParties.forEach((p, idx) => {
+  const sumShares = state.priceSplit.groups.reduce((s, g) => s + (g.share || 0), 0);
+  state.priceSplit.groups.forEach((g, idx) => {
     const row = document.createElement("div");
-    row.className = "pricing-party-row";
+    row.className = "pricing-split-row";
     const nameInput = document.createElement("input");
     nameInput.type = "text";
-    nameInput.className = "party-name";
-    nameInput.value = p.name;
+    nameInput.className = "group-name";
+    nameInput.value = g.name;
     nameInput.placeholder = idx === 0 ? "Mine" : `Group ${idx + 1}`;
-    nameInput.addEventListener("input", (e) => { p.name = e.target.value; });
-    const amountInput = document.createElement("input");
-    amountInput.type = "text";
-    amountInput.className = "party-amount";
-    amountInput.value = p.input;
-    amountInput.placeholder = "$ amount or math (e.g. 1/4*1000)";
-    const computed = document.createElement("span");
-    computed.className = "party-computed";
-    function refresh() {
-      const v = parseAmount(amountInput.value);
+    nameInput.addEventListener("input", () => {
+      g.name = nameInput.value;
+      save(); renderPricing();
+    });
+    const shareInput = document.createElement("input");
+    shareInput.type = "text";
+    shareInput.className = "group-share";
+    shareInput.value = g.shareInput;
+    shareInput.placeholder = "share (1/2, 50%, 0.5)";
+    const pct = document.createElement("span");
+    pct.className = "group-pct";
+    function refreshPct() {
+      const v = parseAmount(shareInput.value);
       if (isNaN(v)) {
-        computed.textContent = "invalid";
-        computed.classList.add("invalid");
+        pct.textContent = "invalid";
+        pct.classList.add("invalid");
       } else {
-        computed.textContent = fmtMoney(v);
-        computed.classList.remove("invalid");
+        pct.textContent = `${(v * 100).toFixed(1)}%`;
+        pct.classList.remove("invalid");
       }
-      updatePricingFormTotals();
     }
-    amountInput.addEventListener("input", (e) => { p.input = e.target.value; refresh(); });
-    refresh();
+    shareInput.addEventListener("input", () => {
+      g.shareInput = shareInput.value;
+      const v = parseAmount(g.shareInput);
+      g.share = isNaN(v) ? 0 : v;
+      save(); renderPricing();
+    });
+    refreshPct();
     row.appendChild(nameInput);
-    row.appendChild(amountInput);
-    row.appendChild(computed);
-    if (formParties.length > 1) {
+    row.appendChild(shareInput);
+    row.appendChild(pct);
+    if (state.priceSplit.groups.length > 1) {
       const x = document.createElement("button");
       x.type = "button";
-      x.className = "party-remove";
+      x.className = "group-remove";
       x.textContent = "×";
       x.title = "Remove this group";
       x.addEventListener("click", () => {
-        formParties.splice(idx, 1);
-        renderPricingPartiesForm();
+        state.priceSplit.groups.splice(idx, 1);
+        save(); renderPricing();
       });
       row.appendChild(x);
     }
     container.appendChild(row);
   });
-  // Hide "+ Add group" when at the cap.
-  const addBtn = document.getElementById("pricing-add-party");
-  if (addBtn) addBtn.style.display = formParties.length >= 4 ? "none" : "";
-  updatePricingFormTotals();
+  const warn = document.getElementById("pricing-split-warn");
+  if (warn) {
+    warn.textContent = Math.abs(sumShares - 1) > 0.001 ? `Shares total ${(sumShares * 100).toFixed(1)}% (expected 100%)` : "";
+  }
+  const addBtn = document.getElementById("pricing-add-split-group");
+  if (addBtn) addBtn.style.display = state.priceSplit.groups.length >= 4 ? "none" : "";
 }
 
-function updatePricingFormTotals() {
-  const totalEl = document.getElementById("pricing-line-total");
-  if (!totalEl) return;
-  const total = formParties.reduce((s, p) => s + (parseAmount(p.input) || 0), 0);
-  totalEl.textContent = `Total: ${fmtMoney(total)}`;
+function renderLineItemForm() {
+  ensurePriceSplit();
+  const totalEl = document.getElementById("pricing-total");
+  if (totalEl && totalEl.value !== formTotalInput) totalEl.value = formTotalInput;
+  if (totalEl && !totalEl.dataset.bound) {
+    totalEl.dataset.bound = "1";
+    totalEl.addEventListener("input", () => {
+      formTotalInput = totalEl.value;
+      updateLineItemFormBreakdown();
+    });
+  }
+  // Render override rows (one per default-split group).
+  const orContainer = document.getElementById("pricing-overrides-rows");
+  if (orContainer) {
+    orContainer.innerHTML = "";
+    state.priceSplit.groups.forEach(g => {
+      const row = document.createElement("div");
+      row.className = "pricing-override-row";
+      const lab = document.createElement("span");
+      lab.className = "or-label";
+      lab.textContent = g.name;
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "or-input";
+      input.placeholder = `(default ${(g.share * 100).toFixed(0)}%)`;
+      input.value = formOverrides[g.id] || "";
+      input.addEventListener("input", () => {
+        if (input.value === "") delete formOverrides[g.id];
+        else formOverrides[g.id] = input.value;
+        updateLineItemFormBreakdown();
+      });
+      const def = document.createElement("span");
+      def.className = "or-default";
+      row.appendChild(lab);
+      row.appendChild(input);
+      row.appendChild(def);
+      orContainer.appendChild(row);
+    });
+  }
+  updateLineItemFormBreakdown();
+}
+
+function updateLineItemFormBreakdown() {
+  const total = parseAmount(formTotalInput) || 0;
+  const out = state.priceSplit.groups.map(g => {
+    if (formOverrides[g.id] != null && formOverrides[g.id] !== "") {
+      const v = parseAmount(formOverrides[g.id]);
+      return `${g.name}: ${fmtMoney(isNaN(v) ? 0 : v)}`;
+    }
+    return `${g.name}: ${fmtMoney(total * (g.share || 0))}`;
+  });
+  const breakdown = document.getElementById("pricing-default-breakdown");
+  if (breakdown) breakdown.textContent = out.join(" · ");
 }
 
 function addPricingLineItem() {
@@ -969,19 +1132,25 @@ function addPricingLineItem() {
     return;
   }
   const labelInput = document.getElementById("pricing-label");
-  const parties = formParties
-    .map(p => ({ name: (p.name || "").trim() || "Unnamed", input: p.input }))
-    .filter(p => parseAmount(p.input) > 0);
-  if (parties.length === 0) { alert("Enter at least one amount."); return; }
+  const total = parseAmount(formTotalInput);
+  if (isNaN(total) || total <= 0) { alert("Enter a total amount."); return; }
   ensureLineItems();
+  // Snapshot overrides into a plain {groupId: amount} object (parsed numbers).
+  const overrides = {};
+  for (const [gid, raw] of Object.entries(formOverrides)) {
+    if (raw == null || raw === "") continue;
+    const v = parseAmount(raw);
+    if (!isNaN(v)) overrides[gid] = v;
+  }
   if (editingLineItemId) {
-    // Update existing line item in place.
     const li = state.lineItems.find(x => x.id === editingLineItemId);
     if (li) {
       li.eventIds = [...pricingSelection];
       li.label = labelInput.value.trim() || null;
-      li.pricing = { parties };
-      delete li.cost; // remove legacy field if present
+      li.total = total;
+      li.overrides = overrides;
+      delete li.cost;
+      delete li.pricing;
     }
     editingLineItemId = null;
     const addBtn = document.getElementById("pricing-add-btn");
@@ -993,14 +1162,14 @@ function addPricingLineItem() {
       id: "li" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
       eventIds: [...pricingSelection],
       label: labelInput.value.trim() || null,
-      pricing: { parties },
+      total,
+      overrides,
     });
   }
   pricingSelection.clear();
   labelInput.value = "";
-  formParties.length = 0;
-  formParties.push({ name: "Mine", input: "" });
-  renderPricingPartiesForm();
+  formTotalInput = "";
+  for (const k of Object.keys(formOverrides)) delete formOverrides[k];
   save();
   renderPricing();
 }
@@ -2774,10 +2943,20 @@ document.getElementById("pricing-clear-sel")?.addEventListener("click", () => {
   renderPricingPills();
 });
 document.getElementById("pricing-cancel-edit")?.addEventListener("click", cancelLineItemEdit);
-document.getElementById("pricing-add-party")?.addEventListener("click", () => {
-  if (formParties.length >= 4) return;
-  formParties.push({ name: `Group ${formParties.length + 1}`, input: "" });
-  renderPricingPartiesForm();
+document.getElementById("pricing-add-split-group")?.addEventListener("click", () => {
+  ensurePriceSplit();
+  if (state.priceSplit.groups.length >= 4) return;
+  const palette = ["indigo", "rose", "emerald", "amber"];
+  const idx = state.priceSplit.groups.length;
+  state.priceSplit.groups.push({
+    id: "g" + (idx + 1),
+    name: `Group ${idx + 1}`,
+    color: palette[idx % palette.length],
+    shareInput: "0",
+    share: 0,
+  });
+  save();
+  renderPricing();
 });
 
 function createOption(name) {
