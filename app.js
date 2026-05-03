@@ -256,9 +256,9 @@ function exportTrip() {
   showExportLinks({ publicUrl, ownerUrl, slug, token });
 }
 
-// jsonblob.com — anonymous JSON storage. Free, ~256 KB cap, no auth, no
-// signup. Returns a Location header pointing at the new blob.
-const JSONBLOB_API = "https://jsonblob.com/api/jsonBlob";
+// Cloudflare Worker that stores trip snapshots in KV. See worker/README.md
+// for one-time setup; replace the placeholder below with your deployed URL.
+const SNAPSHOT_API = "https://trip-snapshots.REPLACE_WITH_YOUR_ACCOUNT.workers.dev";
 
 async function shareSnapshot() {
   const btn = document.getElementById("share-btn");
@@ -266,16 +266,18 @@ async function shareSnapshot() {
   btn.disabled = true;
   btn.textContent = "Publishing…";
   try {
+    if (SNAPSHOT_API.includes("REPLACE_WITH_YOUR_ACCOUNT")) {
+      throw new Error("Snapshot worker URL not configured yet (see worker/README.md)");
+    }
     const blob = stripPricing(state);
-    const res = await fetch(JSONBLOB_API, {
+    const res = await fetch(SNAPSHOT_API, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(blob),
     });
-    if (!res.ok) throw new Error(`jsonblob ${res.status}`);
-    const loc = res.headers.get("Location") || "";
-    const id = loc.split("/").pop();
-    if (!id) throw new Error("no blob id returned");
+    if (!res.ok) throw new Error(`worker ${res.status}`);
+    const { id } = await res.json();
+    if (!id) throw new Error("worker returned no id");
     const shareUrl = `${location.origin}${location.pathname}?snap=${encodeURIComponent(id)}`;
     showShareLink(shareUrl);
   } catch (e) {
@@ -349,9 +351,7 @@ function showSnapshotBanner() {
 }
 
 async function fetchSnapshot(id) {
-  const res = await fetch(`${JSONBLOB_API}/${encodeURIComponent(id)}`, {
-    headers: { "Accept": "application/json" },
-  });
+  const res = await fetch(`${SNAPSHOT_API}/${encodeURIComponent(id)}`);
   if (!res.ok) throw new Error(`snapshot ${res.status}`);
   return await res.json();
 }
