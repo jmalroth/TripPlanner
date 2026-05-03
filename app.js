@@ -2711,6 +2711,20 @@ function consumeDate(text, defaultYear) {
   return null;
 }
 
+// Pull a total price out of a paste — looks for a "total"/"price"/"amount"
+// line followed by a $/USD amount. Returns the numeric value or null. Kept
+// conservative so a bare "$5" inside a description doesn't get picked up.
+function detectTotalPrice(text) {
+  // "Total ... $1,234.56" — currency before amount.
+  const rxBefore = /(?:total\s*(?:price|cost|amount|due|charged|for[^\n]*?|stay[^\n]*?)?|grand\s*total|amount\s*due)[^\n]*?(?:US\s*\$|USD\s*\$?|CAD\s*\$?|\$)\s*([\d]{1,3}(?:,\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)/i;
+  // "Total ... 1,234.56 USD" — amount before currency.
+  const rxAfter = /(?:total\s*(?:price|cost|amount|for[^\n]*?|stay[^\n]*?)?|grand\s*total)[^\n]*?([\d]{1,3}(?:,\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)\s*(?:USD|CAD|US\$)/i;
+  const m = text.match(rxBefore) || text.match(rxAfter);
+  if (!m) return null;
+  const n = parseFloat(m[1].replace(/,/g, ""));
+  return isFinite(n) && n > 0 ? n : null;
+}
+
 // Parse Google Flights' compact paste format — the one you get from the
 // search results card or "Booking summary" view:
 //   Seattle (SEA) to Sao Paulo (GRU)
@@ -3539,8 +3553,27 @@ function wirePasteBlock({ inputId, parseId, clearId, statusId, targetId }) {
       const opt = state.options.find(o => o.id === target);
       if (opt) opt.events.push(...events);
     }
+    // If the paste contained an obvious total price ("Total: $1,234.56" /
+    // "Total price for N travelers: US$12,571.00" / etc.), bundle the just-
+    // added events into a pricing line item with that total. Only fires for
+    // main-itinerary pastes; options pastes are speculative so we skip.
+    let pricingNote = "";
+    if (target === "__main__") {
+      const total = detectTotalPrice(text);
+      if (total != null && events.length > 0) {
+        if (!Array.isArray(state.lineItems)) state.lineItems = [];
+        state.lineItems.push({
+          id: uid(),
+          eventIds: events.map(e => e.id),
+          label: null,
+          total,
+          overrides: {},
+        });
+        pricingNote = ` ($${total.toLocaleString()} added to Pricing)`;
+      }
+    }
     save();
-    status.textContent = `Added ${events.length} event(s).`;
+    status.textContent = `Added ${events.length} event(s).${pricingNote}`;
     status.className = "paste-status success";
     input.value = "";
     renderApp();
