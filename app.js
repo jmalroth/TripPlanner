@@ -3497,9 +3497,110 @@ document.getElementById("add-option-btn")?.addEventListener("click", () => {
   renderApp();
 });
 
-function wirePasteBlock({ inputId, parseId, clearId, statusId, targetId }) {
+async function smartParseRemote(text, statusEl, targetIsMain) {
+  const pw = getOwnerPassword();
+  if (!pw) {
+    statusEl.textContent = "Set the owner password first (edit something to get prompted).";
+    statusEl.className = "paste-status error";
+    return null;
+  }
+  statusEl.textContent = "Parsing with Claude…";
+  statusEl.className = "paste-status";
+  try {
+    const res = await fetch(`${SNAPSHOT_API}/smart-parse`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${pw}` },
+      body: JSON.stringify({ text, tripStart: state.start || null, tripEnd: state.end || null }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `worker ${res.status}`);
+    return data;
+  } catch (e) {
+    statusEl.textContent = `Smart parse failed: ${e.message}`;
+    statusEl.className = "paste-status error";
+    return null;
+  }
+}
+
+function wirePasteBlock({ inputId, parseId, clearId, statusId, targetId, smartId }) {
   const parseBtn = document.getElementById(parseId);
   if (!parseBtn) return;
+  const smartBtn = smartId ? document.getElementById(smartId) : null;
+
+  const insertEvents = (events, totalPrice, target, status, input) => {
+    if (target === "__main__") {
+      state.events.push(...events);
+      let dateChanged = false;
+      for (const e of events) {
+        if (e.start && (!state.start || e.start < state.start)) { state.start = e.start; dateChanged = true; }
+        if (e.end && (!state.end || e.end > state.end)) { state.end = e.end; dateChanged = true; }
+      }
+      if (dateChanged) {
+        const ts = document.getElementById("trip-start"); if (ts) ts.value = state.start || "";
+        const te = document.getElementById("trip-end"); if (te) te.value = state.end || "";
+      }
+      let pricingNote = "";
+      if (totalPrice != null && events.length > 0) {
+        if (!Array.isArray(state.lineItems)) state.lineItems = [];
+        state.lineItems.push({ id: uid(), eventIds: events.map(e => e.id), label: null, total: totalPrice, overrides: {} });
+        pricingNote = ` ($${totalPrice.toLocaleString()} added to Pricing)`;
+      }
+      save();
+      status.textContent = `Added ${events.length} event(s).${pricingNote}`;
+      status.className = "paste-status success";
+      input.value = "";
+      renderApp();
+    } else {
+      const opt = state.options.find(o => o.id === target);
+      if (opt) opt.events.push(...events);
+      save();
+      status.textContent = `Added ${events.length} event(s).`;
+      status.className = "paste-status success";
+      input.value = "";
+      renderApp();
+    }
+  };
+
+  if (smartBtn) {
+    smartBtn.addEventListener("click", async () => {
+      const input = document.getElementById(inputId);
+      const status = document.getElementById(statusId);
+      const text = input.value;
+      if (!text.trim()) {
+        status.textContent = "Paste some text first.";
+        status.className = "paste-status error";
+        return;
+      }
+      smartBtn.disabled = true;
+      const data = await smartParseRemote(text, status);
+      smartBtn.disabled = false;
+      if (!data) return;
+      const events = (data.events || []).map(e => ({
+        id: uid(),
+        title: e.title || "Event",
+        lane: ["flights","lodging","activities","rental","location"].includes(e.lane) ? e.lane : "activities",
+        color: e.lane === "flights" ? "indigo" : e.lane === "lodging" ? "amber" : e.lane === "rental" ? "orange" : e.lane === "location" ? "violet" : "emerald",
+        start: e.start, end: e.end || e.start,
+        ...(e.startTime ? { startTime: e.startTime } : {}),
+        ...(e.endTime ? { endTime: e.endTime } : {}),
+        notes: e.notes || "Parsed by Claude",
+      })).filter(e => e.start && /^\d{4}-\d{2}-\d{2}$/.test(e.start));
+      if (events.length === 0) {
+        status.textContent = "Claude didn't find any events in that text.";
+        status.className = "paste-status error";
+        return;
+      }
+      let target;
+      if (!targetId) target = "__main__";
+      else {
+        const sel = document.getElementById(targetId);
+        target = sel?.value || "__new__";
+        if (target === "__new__") { const newOpt = createOption(); target = newOpt.id; }
+      }
+      insertEvents(events, data.totalPrice, target, status, input);
+    });
+  }
+
   parseBtn.addEventListener("click", () => {
     const input = document.getElementById(inputId);
     const status = document.getElementById(statusId);
@@ -3607,6 +3708,7 @@ function wirePasteBlock({ inputId, parseId, clearId, statusId, targetId }) {
 wirePasteBlock({
   inputId: "paste-input",
   parseId: "paste-parse",
+  smartId: "paste-smart",
   clearId: "paste-clear",
   statusId: "paste-status",
   targetId: "paste-target",
@@ -3614,6 +3716,7 @@ wirePasteBlock({
 wirePasteBlock({
   inputId: "paste-input-main",
   parseId: "paste-parse-main",
+  smartId: "paste-smart-main",
   clearId: "paste-clear-main",
   statusId: "paste-status-main",
   targetId: null,

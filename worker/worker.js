@@ -10,8 +10,11 @@
 //   PUT  /<slug>  + auth     -> 200 { ok: true } | 401 | 413 | 400
 //   POST /snap               -> 201 { id } (anonymous one-off snapshot)
 //   GET  /snap/<id>          -> 200 JSON snapshot | 404
+//   POST /smart-parse + auth -> 200 { events, totalPrice? } | 401 | 502
 //
-// Set the password once with: wrangler secret put OWNER_PASSWORD
+// Secrets:
+//   wrangler secret put OWNER_PASSWORD     (write auth)
+//   wrangler secret put ANTHROPIC_API_KEY  (smart-parse only)
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -116,6 +119,96 @@ export default {
       }
     }
 
+    if (req.method === "POST" && parts.length === 1 && parts[0] === "smart-parse") {
+      if (!isOwner(req, env)) return json({ error: "unauthorized" }, { status: 401 });
+      if (!env.ANTHROPIC_API_KEY) return json({ error: "ANTHROPIC_API_KEY not configured" }, { status: 500 });
+      let body;
+      try { body = await req.json(); } catch { return json({ error: "invalid JSON" }, { status: 400 }); }
+      const text = (body.text || "").toString();
+      if (!text.trim()) return json({ error: "empty text" }, { status: 400 });
+      if (text.length > 100_000) return json({ error: "text too long" }, { status: 413 });
+      const tripStart = body.tripStart || null;
+      const tripEnd = body.tripEnd || null;
+      try {
+        const result = await smartParse(text, tripStart, tripEnd, (env.ANTHROPIC_API_KEY || "").trim());
+        return json(result);
+      } catch (e) {
+        return json({ error: `parse failed: ${e.message}` }, { status: 502 });
+      }
+    }
+
     return json({ error: "not found" }, { status: 404 });
   },
 };
+
+// Ask Claude to extract structured travel events from a pasted email/web body.
+// Returns { events: [...], totalPrice?: number }. Uses Haiku for cost (~$0.002
+// per parse) and prompt-cached system prompt to keep tokens cheap.
+async function smartParse(text, tripStart, tripEnd, apiKey) {
+  const SCHEMA_HINT = `
+Return ONLY a JSON object matching this shape:
+{
+  "events": [
+    {
+      "title": "string (concise — e.g. 'SEA → GRU' for flights, hotel name for lodging)",
+      "lane": "flights | lodging | activities | rental | location",
+      "start": "YYYY-MM-DD",
+      "end":   "YYYY-MM-DD (same as start for single-day events)",
+      "startTime": "HH:MM (24-hour, optional — only for flights and timed events)",
+      "endTime":   "HH:MM (24-hour, optional)",
+      "notes": "string (optional — airline, cabin, flight numbers, address, etc.)"
+    }
+  ],
+  "totalPrice": number (optional — the total cost across all parsed events, if a total appears in the text)
+}
+
+Rules:
+- One event per flight leg (don't combine round-trips into one event).
+- Hotels: one event spanning check-in date to check-out date. Lane = "lodging".
+- Use the trip context dates to disambiguate years for ambiguous dates (e.g. "Aug 13" without a year).
+- For flight titles use IATA codes: "SEA → GRU", not "Seattle to Sao Paulo".
+- Don't include flight numbers in title; put them in notes.
+- Skip emails that aren't about travel reservations — return events: [].
+- Output ONLY the JSON object, no commentary, no markdown fencing.`;
+
+  const ctx = (tripStart && tripEnd)
+    ? `Trip date range: ${tripStart} to ${tripEnd}.`
+    : `Trip dates not yet set — use any explicit year in the text, otherwise current year.`;
+
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 1500,
+      system: [
+        {
+          type: "text",
+          text: "You extract structured travel-event data from confirmation emails and itineraries. " + SCHEMA_HINT,
+          cache_control: { type: "ephemeral" },
+        },
+      ],
+      messages: [
+        { role: "user", content: `${ctx}\n\nEmail/itinerary text:\n${text}` },
+      ],
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    throw new Error(`anthropic ${res.status}: ${errText.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  const content = data.content?.[0]?.text || "";
+  // Strip optional markdown fencing in case the model adds it despite the rule.
+  const clean = content.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
+  let parsed;
+  try { parsed = JSON.parse(clean); }
+  catch { throw new Error(`model returned non-JSON: ${clean.slice(0, 200)}`); }
+  if (!Array.isArray(parsed.events)) parsed.events = [];
+  return parsed;
+}

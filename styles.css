@@ -171,6 +171,13 @@ button.ghost {
 .sync-indicator.saved { color: #047a52; }
 .sync-indicator.viewer { color: var(--muted); font-style: italic; }
 
+button.smart {
+  background: linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%);
+  color: #fff;
+  border: none;
+}
+button.smart:disabled { opacity: 0.6; cursor: progress; }
+
 .actions { position: relative; }
 .export-links {
   position: absolute;
