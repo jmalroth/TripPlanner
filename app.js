@@ -776,12 +776,13 @@ function renderPricingLineItems() {
       evList.className = "li-events";
       if (li.label) evList.textContent = eventTitles.join(" · ");
       if (li.label) main.appendChild(evList);
-      // Per-group amount pills.
+      // Per-group amount pills (skip groups with $0 contribution).
       ensurePriceSplit();
       const pills = document.createElement("div");
       pills.className = "li-group-pills";
       state.priceSplit.groups.forEach((g, idx) => {
         const amt = lineItemGroupAmount(li, g.id, idx);
+        if (!amt) return;
         const isOverridden = li.overrides && li.overrides[g.id] != null;
         const pill = document.createElement("span");
         pill.className = `group-pill bg-${g.color || "indigo"}` + (isOverridden ? " overridden" : "");
@@ -844,6 +845,7 @@ function renderPricingSummary() {
   const groupRow = document.createElement("div");
   groupRow.className = "pricing-summary-groups";
   state.priceSplit.groups.forEach((g, idx) => {
+    if (!perGroup[idx]) return; // hide groups with no spending yet
     const pill = document.createElement("span");
     pill.className = `group-pill summary-pill bg-${g.color || "indigo"}`;
     pill.textContent = `${g.name}: ${fmtMoney(perGroup[idx])}`;
