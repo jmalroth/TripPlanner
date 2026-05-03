@@ -351,6 +351,7 @@ function showShareDropdown({ publicUrl, pricingUrl }) {
       <div class="export-links-input">
         <input type="text" readonly data-which="pricing" />
         <button type="button" data-copy="pricing">Copy</button>
+        <button type="button" data-wa="pricing" class="ghost" title="Send via WhatsApp">WhatsApp</button>
       </div>
     </div>
   ` : "";
@@ -360,6 +361,7 @@ function showShareDropdown({ publicUrl, pricingUrl }) {
       <div class="export-links-input">
         <input type="text" readonly data-which="public" />
         <button type="button" data-copy="public">Copy</button>
+        <button type="button" data-wa="public" class="ghost" title="Send via WhatsApp">WhatsApp</button>
       </div>
     </div>
     ${pricingRow}
@@ -384,6 +386,17 @@ function showShareDropdown({ publicUrl, pricingUrl }) {
         input.select();
         document.execCommand("copy");
       }
+    });
+  });
+  panel.querySelectorAll('button[data-wa]').forEach(btn => {
+    btn.addEventListener("click", () => {
+      const which = btn.dataset.wa;
+      const url = which === "pricing" ? pricingUrl : publicUrl;
+      const tripName = state.name || "Trip";
+      const text = `${tripName}\n${url}`;
+      // wa.me/?text=... opens WhatsApp's contact picker so the user picks who
+      // to send to. Works on web, desktop, and mobile.
+      window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank", "noopener");
     });
   });
   panel.querySelector(".export-links-close").addEventListener("click", () => panel.remove());
