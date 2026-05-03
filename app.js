@@ -2927,10 +2927,18 @@ async function bootstrap() {
   // One-time migration of any legacy single-trip blob into the registry.
   const migratedId = migrateLegacy();
 
+  // Prefer ?id=<slug> (the new clean URL); fall back to ?trip=<id> for any
+  // older bookmarks. Both resolve through the registry to the underlying id.
+  const slug = params.get("id");
   let tripId = params.get("trip");
+  if (slug && !tripId) {
+    const list = readRegistry();
+    const hit = list.find(t => t.slug === slug) || list.find(t => t.id === slug);
+    if (hit) tripId = hit.id;
+  }
 
-  // If no ?trip=, try to recover: explicit migrated id, then first registry
-  // entry, otherwise punt to the trips landing page.
+  // If neither resolved, recover: migrated id, then first registry entry,
+  // otherwise punt to the trips landing page.
   if (!tripId) {
     if (migratedId) {
       tripId = migratedId;
@@ -2939,12 +2947,15 @@ async function bootstrap() {
       if (list.length > 0) {
         tripId = list[0].id;
       } else {
-        window.location.replace("trips.html");
+        window.location.replace("./");
         return;
       }
     }
+    const list = readRegistry();
+    const trip = list.find(t => t.id === tripId);
     const url = new URL(window.location.href);
-    url.searchParams.set("trip", tripId);
+    url.searchParams.delete("trip");
+    url.searchParams.set("id", trip?.slug || tripId);
     window.location.replace(url.toString());
     return;
   }

@@ -4,224 +4,585 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <meta name="robots" content="noindex, nofollow" />
-<title>Trip Timeline Builder</title>
+<title>Trips</title>
 <link rel="stylesheet" href="styles.css" />
+<style>
+  .trips-wrap { max-width: 880px; margin: 0 auto; padding: 24px 20px; }
+  .trips-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 18px; }
+  .trips-head h1 { margin: 0; font-size: 22px; }
+  .trips-section h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 22px 0 8px; }
+  .trip-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+  .trip-card { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  .trip-card[data-href] { cursor: pointer; transition: border-color 0.1s, background 0.1s; }
+  .trip-card[data-href]:hover { border-color: var(--accent); background: var(--panel-2); }
+  .trip-card .trip-name { font-weight: 600; color: var(--text); }
+  .trip-meta-line { color: var(--muted); font-size: 13px; }
+  .trip-actions { display: flex; gap: 6px; }
+  .trip-actions button { background: transparent; border: 1px solid var(--line); color: var(--muted); padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+  .trip-actions button:hover { color: var(--text); }
+  .trip-actions button.danger:hover { color: #b12a48; border-color: #b12a48; }
+  .empty { color: var(--muted); font-style: italic; padding: 8px 0; }
+  .new-trip-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; padding: 14px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 12px; }
+  .new-trip-form label { display: flex; flex-direction: column; font-size: 12px; color: var(--muted); gap: 4px; }
+  .new-trip-form input { padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; font-size: 14px; }
+  .new-trip-form button { padding: 7px 14px; background: var(--accent); color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
+
+  .view-toggle { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .view-toggle button { background: var(--panel); border: none; color: var(--muted); padding: 6px 12px; font-size: 13px; cursor: pointer; }
+  .view-toggle button + button { border-left: 1px solid var(--line); }
+  .view-toggle button.active { background: var(--accent); color: #fff; }
+
+  .calendar-wrap { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin-bottom: 14px; }
+  .cal-month-title { margin: 0 0 10px; font-size: 16px; }
+  .cal-empty { color: var(--muted); font-style: italic; padding: 20px; text-align: center; }
+  .cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+  .cal-dow { background: var(--panel-2); color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; padding: 6px 8px; text-align: center; }
+  .cal-day { background: var(--panel); min-height: 64px; padding: 4px 0; position: relative; font-size: 12px; }
+  .cal-day.other-month { background: var(--panel-2); color: var(--muted); }
+  .cal-day.today .cal-day-num { background: var(--accent); color: #fff; border-radius: 50%; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; }
+  .cal-day-num { display: inline-block; margin: 0 6px; }
+  .cal-trip { display: block; margin: 2px 4px 0; padding: 2px 6px; color: #fff; font-size: 11px; border-radius: 3px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-decoration: none; }
+  .cal-trip:hover { filter: brightness(1.1); }
+  /* Bars that continue from the previous cell extend left to bridge the
+     grid gap and cell padding, and drop their left rounding. */
+  .cal-trip.continued { margin-left: -1px; padding-left: 11px; border-top-left-radius: 0; border-bottom-left-radius: 0; }
+  /* Bars that continue into the next cell do the same on the right. */
+  .cal-trip.continues { margin-right: -1px; padding-right: 11px; border-top-right-radius: 0; border-bottom-right-radius: 0; }
+  .cal-trip.bg-indigo  { background: #6c8cff; }
+  .cal-trip.bg-teal    { background: #2dd4bf; }
+  .cal-trip.bg-amber   { background: #f59e0b; }
+  .cal-trip.bg-rose    { background: #fb7185; }
+  .cal-trip.bg-emerald { background: #34d399; }
+  .cal-trip.bg-violet  { background: #a78bfa; }
+  .cal-trip.bg-grey    { background: #b9bec7; }
+  .cal-trip.bg-accent  { background: var(--accent); }
+  .cal-trip.cal-spacer { background: transparent; pointer-events: none; }
+</style>
 </head>
 <body>
-  <header class="topbar">
-    <div class="trip-meta">
-      <a href="trips.html" class="back-link" title="All trips">← Trips</a>
-      <input id="trip-name" type="text" placeholder="Trip name" />
-      <label>Start <input id="trip-start" type="date" /></label>
-      <label>End <input id="trip-end" type="date" /></label>
-      <span id="trip-length" class="trip-length"></span>
+  <div class="trips-wrap">
+    <div class="trips-head">
+      <h1>Trips</h1>
+      <div class="view-toggle" id="view-toggle">
+        <button data-view="list" class="active">List</button>
+        <button data-view="calendar">Calendar</button>
+      </div>
     </div>
-    <div class="actions">
-      <label class="toggle">
-        <input id="tz-aware" type="checkbox" />
-        <span>Follow timezone</span>
-      </label>
-      <button id="add-event-btn" type="button">+ Add event</button>
-      <button id="clear-btn" type="button" class="ghost">Clear</button>
-    </div>
-  </header>
 
-  <nav class="tabs">
-    <button class="tab-btn" data-tab="main">My itinerary</button>
-    <button class="tab-btn" data-tab="pricing">Pricing</button>
-    <button class="tab-btn" data-tab="options">Options</button>
-  </nav>
-
-  <div class="tab-panel" id="tab-main">
-    <main>
-      <section class="panel">
-        <div class="panel-head">
-          <h2>Add to itinerary</h2>
-          <span class="hint">Paste a flight, or type a command like "add hotel on jul 7 for znz hotel"</span>
-        </div>
-        <details class="paste-block">
-          <summary>Paste flight data or type a command</summary>
-          <div class="paste-content">
-            <textarea id="paste-input-main" rows="6" placeholder="Paste a flight (Google Flights / Kayak / etc.) — or type a command:&#10;  add hotel on jul 7 for znz hotel&#10;  add activity on july 4 hiking&#10;  add lodging on jul 7 to jul 8 at riu palace"></textarea>
-            <div class="paste-actions">
-              <button id="paste-parse-main" type="button">Parse &amp; add</button>
-              <button id="paste-clear-main" type="button" class="ghost">Clear</button>
-            </div>
-            <div id="paste-status-main" class="paste-status"></div>
-          </div>
-        </details>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head">
-          <h2>Whole trip</h2>
-          <span class="hint">Overview — entire trip on one row</span>
-        </div>
-        <div id="overview" class="timeline overview"></div>
-      </section>
-
-      <section class="panel" id="todo-panel" hidden>
-        <div class="panel-head">
-          <h2>To do — still need to book</h2>
-          <span class="hint">Tentative items from your itinerary</span>
-        </div>
-        <div class="todo-bundle-bar" id="todo-bundle-bar" hidden>
-          <input id="todo-bundle-label" type="text" placeholder="Bundle name (e.g. 'Outbound flights')" />
-          <button id="todo-bundle-add" type="button">Bundle selected</button>
-          <button id="todo-bundle-clear" type="button" class="ghost">Clear</button>
-        </div>
-        <ul id="todo-list" class="todo-list"></ul>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head">
-          <h2>Breakdown</h2>
-          <div class="segment-controls">
-            <label>Group by
-              <select id="segment-size">
-                <option value="auto">Auto</option>
-                <option value="3">3 days</option>
-                <option value="7">Week</option>
-                <option value="14">2 weeks</option>
-              </select>
-            </label>
-          </div>
-        </div>
-        <div id="breakdown" class="breakdown"></div>
-      </section>
-    </main>
-  </div>
-
-  <div class="tab-panel" id="tab-pricing" hidden>
-    <main>
-      <section class="panel">
-        <div class="panel-head">
-          <h2>Pricing</h2>
-          <span class="hint">Bundle items into line items with a single price</span>
-        </div>
-        <div class="pricing-builder">
-          <div class="pricing-pills-head">
-            <span>Click items to bundle, then add a line item:</span>
-            <span id="pricing-selection-summary" class="pricing-selection-summary"></span>
-          </div>
-          <div id="pricing-pills" class="pricing-pills"></div>
-          <div class="pricing-add-form">
-            <input id="pricing-label" type="text" placeholder="Optional label (e.g. 'Round trip flights')" />
-            <div class="pricing-hint">
-              Tip: amount fields accept math —
-              <code>1/4*1000</code>, <code>25%*800</code>, <code>2*150</code>, or just <code>250</code>.
-            </div>
-            <div id="pricing-parties"></div>
-            <div class="pricing-add-actions">
-              <button id="pricing-add-party" type="button" class="ghost">+ Add group</button>
-              <span id="pricing-line-total" class="pricing-line-total">Total: $0.00</span>
-              <button id="pricing-add-btn" type="button">+ Add line item</button>
-              <button id="pricing-cancel-edit" type="button" class="ghost" hidden>Cancel edit</button>
-              <button id="pricing-clear-sel" type="button" class="ghost">Clear selection</button>
-            </div>
-          </div>
-        </div>
-        <div id="pricing-summary" class="pricing-summary"></div>
-        <div id="pricing-line-items" class="pricing-line-items"></div>
-      </section>
-    </main>
-  </div>
-
-  <div class="tab-panel" id="tab-options" hidden>
-    <main>
-      <section class="panel">
-        <div class="panel-head">
-          <h2>Travel options</h2>
-          <span class="hint">Stage alternative plans, then apply the one you pick</span>
-        </div>
-        <div class="options-controls" hidden>
-          <input id="option-range-start" type="date" />
-          <input id="option-range-end" type="date" />
-          <button id="add-option-btn" type="button"></button>
-        </div>
-        <div class="options-legend">
-          <span class="legend-swatch solid"></span> Confirmed (from itinerary)
-          <span class="legend-swatch dashed"></span> Option (candidate)
-        </div>
-        <details class="paste-block">
-          <summary>Paste flight data</summary>
-          <div class="paste-content">
-            <textarea id="paste-input" rows="8" placeholder="Paste a flight (Google Flights / Kayak / etc.) — or type a command:&#10;  add hotel on jul 7 for znz hotel&#10;  add activity on july 4 hiking&#10;  add lodging on jul 7 to jul 8 at riu palace"></textarea>
-            <div class="paste-actions">
-              <label>Add to
-                <select id="paste-target"></select>
-              </label>
-              <button id="paste-parse" type="button">Parse &amp; add</button>
-              <button id="paste-clear" type="button" class="ghost">Clear</button>
-            </div>
-            <div id="paste-status" class="paste-status"></div>
-            <details class="paste-help">
-              <summary>+ what can I paste?</summary>
-              <div class="paste-help-content">
-                <p><strong>Flight blocks</strong> — paste Google Flights / Kayak output. Multi-leg trips and layovers are handled. Both single-line ("Kenya AirwaysEconomyBoeing 737KQ 427") and multi-line ("Air Tanzania" / "Economy" / "ATR 72PW 721") formats work, plus <code>+1</code> / <code>+2</code> day-offset times.</p>
-                <p><strong>Plain-language commands</strong> — type instead of paste:</p>
-                <ul>
-                  <li><code>add hotel on jul 7 for znz hotel</code> — 1-day lodging titled "znz hotel"</li>
-                  <li><code>add lodging on jul 7 to jul 8 at riu palace</code> — 2-day lodging</li>
-                  <li><code>add activity on july 4 hiking</code></li>
-                  <li><code>add location on jul 5 cape town</code></li>
-                  <li><code>add flight on jul 6 jro to nbo</code> — generic flights-lane placeholder (use a real Google Flights paste if you want times &amp; TZ to flow through)</li>
-                </ul>
-                <p><strong>Date formats</strong>: <code>july 7</code>, <code>jul 7</code>, <code>2026-07-07</code>, <code>7/7</code>, <code>7/7/2026</code>. Year defaults to the trip's start year if omitted.</p>
-                <p><strong>Lane keywords</strong>: <code>hotel</code> / <code>hotels</code> / <code>lodging</code>, <code>flight</code> / <code>flights</code>, <code>activity</code> / <code>activities</code>, <code>location</code> / <code>where</code>. The word <code>placeholder</code> is tolerated, and a leading <code>for</code> or <code>at</code> before the title is stripped.</p>
-              </div>
-            </details>
-          </div>
-        </details>
-        <div id="options-list"></div>
-        <div id="options-comparison"></div>
-      </section>
-    </main>
-  </div>
-
-  <dialog id="event-dialog">
-    <form id="event-form" method="dialog">
-      <h3 id="event-dialog-title">Add event</h3>
-      <label>Title<input name="title" type="text" required /></label>
-      <div class="row-2">
-        <label>Lane
-          <select name="lane">
-            <option value="location">Where</option>
-            <option value="flights">Flights</option>
-            <option value="lodging">Lodging</option>
-            <option value="rental">Rental car</option>
-            <option value="activities" selected>Activities</option>
-          </select>
-        </label>
-        <div>
-          <div style="font-size:12px;color:var(--muted);margin-bottom:4px;">Color</div>
-          <div class="color-grid" id="color-grid"></div>
-        </div>
-      </div>
-      <div class="row-2">
-        <label>Start day<input name="start" type="date" required /></label>
-        <label>Start time<input name="startTime" type="time" /></label>
-      </div>
-      <div class="row-2">
-        <label>End day<input name="end" type="date" required /></label>
-        <label>End time<input name="endTime" type="time" /></label>
-      </div>
-      <label class="checkbox-row">
-        <input type="checkbox" name="tentative" id="event-tentative" />
-        <span>Tentative — still need to book</span>
-      </label>
-      <label>Notes<textarea name="notes" rows="2"></textarea></label>
-      <input type="hidden" name="id" />
-      <input type="hidden" name="optionId" />
-      <div class="dialog-actions">
-        <button type="button" id="event-delete" class="danger" hidden>Delete</button>
-        <span class="spacer"></span>
-        <button type="button" id="event-cancel" class="ghost">Cancel</button>
-        <button type="submit" id="event-save">Save</button>
-      </div>
+    <form id="new-trip-form" class="new-trip-form">
+      <label>Name<input id="nt-name" type="text" placeholder="e.g. Iceland 2027" required /></label>
+      <label>Start<input id="nt-start" type="date" /></label>
+      <label>End<input id="nt-end" type="date" /></label>
+      <button type="submit">+ New trip</button>
     </form>
-  </dialog>
 
-  <script src="app.js"></script>
+    <div id="list-view">
+      <section class="trips-section">
+        <h2>Upcoming &amp; current</h2>
+        <ul id="upcoming-list" class="trip-list"></ul>
+      </section>
+
+      <section class="trips-section">
+        <h2>Past</h2>
+        <ul id="past-list" class="trip-list"></ul>
+      </section>
+
+    </div>
+
+    <div id="calendar-view" hidden>
+      <div id="calendar-months"></div>
+    </div>
+  </div>
+
+<script>
+const REGISTRY_KEY = "trip-builder-trips";
+const TRIP_KEY_PREFIX = "trip-builder-trip-";
+const LEGACY_KEY = "trip-builder-v7";
+
+function readRegistry() {
+  try { return JSON.parse(localStorage.getItem(REGISTRY_KEY) || "[]"); }
+  catch (e) { return []; }
+}
+function writeRegistry(list) {
+  localStorage.setItem(REGISTRY_KEY, JSON.stringify(list));
+}
+function newTripId() {
+  return "t" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
+// Slugify a name into a URL-safe identifier ("Africa Safari 2026" → "africa-safari-2026").
+function slugify(name) {
+  return (name || "trip")
+    .toLowerCase()
+    .normalize("NFKD").replace(/[̀-ͯ]/g, "")  // strip accents
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40) || "trip";
+}
+function uniqueSlug(name, existingSlugs) {
+  const base = slugify(name);
+  if (!existingSlugs.has(base)) return base;
+  let i = 2;
+  while (existingSlugs.has(`${base}-${i}`)) i++;
+  return `${base}-${i}`;
+}
+function ensureAllSlugs() {
+  const list = readRegistry();
+  let changed = false;
+  const used = new Set(list.map(t => t.slug).filter(Boolean));
+  for (const t of list) {
+    if (!t.slug) {
+      t.slug = uniqueSlug(t.name, used);
+      used.add(t.slug);
+      changed = true;
+    }
+  }
+  if (changed) writeRegistry(list);
+}
+function tripUrl(t) {
+  return `trip.html?id=${encodeURIComponent(t.slug || t.id)}`;
+}
+
+// One-time cleanup: drop location-lane events that fall entirely before the
+// first flight or entirely after the last flight (the "you are at home"
+// bookend cities like Vancouver/Seattle from the original Zanzibar seed).
+const BOOKEND_CLEANUP_KEY = "trip-builder-bookend-cleanup-v1";
+function cleanupBookendsOnce() {
+  if (localStorage.getItem(BOOKEND_CLEANUP_KEY)) return;
+  const list = readRegistry();
+  for (const t of list) {
+    try {
+      const raw = localStorage.getItem(TRIP_KEY_PREFIX + t.id);
+      if (!raw) continue;
+      const blob = JSON.parse(raw);
+      if (!Array.isArray(blob.events) || blob.events.length === 0) continue;
+      const flights = blob.events.filter(e =>
+        e.lane === "flights" && !(e.title || "").endsWith("layover"));
+      if (flights.length === 0) continue;
+      const firstStart = flights.reduce((a, e) => e.start < a ? e.start : a, flights[0].start);
+      const lastEnd    = flights.reduce((a, e) => e.end   > a ? e.end   : a, flights[0].end);
+      blob.events = blob.events.filter(e => {
+        if (e.lane !== "location") return true;
+        // A bookend "starting city" ends on or before the first flight's
+        // departure day; a "ending city" starts on or after the last
+        // flight's arrival day.
+        if (e.end   <= firstStart) return false;
+        if (e.start >= lastEnd)    return false;
+        return true;
+      });
+      localStorage.setItem(TRIP_KEY_PREFIX + t.id, JSON.stringify(blob));
+    } catch (e) { /* ignore */ }
+  }
+  localStorage.setItem(BOOKEND_CLEANUP_KEY, "1");
+}
+
+// Migrate any legacy single-trip blob on first visit so it shows up in the list.
+(function migrateLegacy() {
+  const legacy = localStorage.getItem(LEGACY_KEY);
+  if (!legacy) return;
+  try {
+    const parsed = JSON.parse(legacy);
+    const id = newTripId();
+    localStorage.setItem(TRIP_KEY_PREFIX + id, legacy);
+    const list = readRegistry();
+    const used = new Set(list.map(t => t.slug).filter(Boolean));
+    list.push({
+      id,
+      slug: uniqueSlug(parsed.name || "Untitled trip", used),
+      name: parsed.name || "Untitled trip",
+      start: parsed.start || null,
+      end: parsed.end || null,
+    });
+    writeRegistry(list);
+    localStorage.removeItem(LEGACY_KEY);
+  } catch (e) { /* ignore */ }
+})();
+
+function fmtRange(t) {
+  if (!t.start && !t.end) return "No dates set";
+  if (t.start && t.end) return `${t.start} → ${t.end}`;
+  return t.start || t.end;
+}
+
+function todayStr() {
+  const d = new Date();
+  return d.toISOString().slice(0, 10);
+}
+
+function isPast(t) {
+  return t.end && t.end < todayStr();
+}
+
+function render() {
+  const list = readRegistry();
+  const upcoming = list.filter(t => !isPast(t));
+  const past = list.filter(t => isPast(t));
+
+  const ul1 = document.getElementById("upcoming-list");
+  const ul2 = document.getElementById("past-list");
+  ul1.innerHTML = "";
+  ul2.innerHTML = "";
+
+  function row(t) {
+    const li = document.createElement("li");
+    li.className = "trip-card";
+    li.dataset.href = tripUrl(t);
+    li.innerHTML = `
+      <div>
+        <span class="trip-name"></span>
+        <div class="trip-meta-line"></div>
+      </div>
+      <div class="trip-actions">
+        <button data-action="rename">Rename</button>
+        <button data-action="delete" class="danger">Delete</button>
+      </div>
+    `;
+    li.querySelector(".trip-name").textContent = t.name || "Untitled trip";
+    li.querySelector(".trip-meta-line").textContent = fmtRange(t);
+    li.addEventListener("click", (e) => {
+      if (e.target.closest("button")) return;
+      window.location.href = li.dataset.href;
+    });
+    li.querySelector('[data-action="rename"]').addEventListener("click", () => {
+      const next = prompt("Rename trip:", t.name || "");
+      if (next == null) return;
+      const all = readRegistry();
+      const i = all.findIndex(x => x.id === t.id);
+      if (i < 0) return;
+      all[i].name = next.trim() || all[i].name;
+      writeRegistry(all);
+      // Keep per-trip blob in sync.
+      try {
+        const raw = localStorage.getItem(TRIP_KEY_PREFIX + t.id);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          parsed.name = all[i].name;
+          localStorage.setItem(TRIP_KEY_PREFIX + t.id, JSON.stringify(parsed));
+        }
+      } catch (e) { /* ignore */ }
+      render();
+    });
+    li.querySelector('[data-action="delete"]').addEventListener("click", () => {
+      if (!confirm(`Delete "${t.name}"? This can't be undone.`)) return;
+      const all = readRegistry().filter(x => x.id !== t.id);
+      writeRegistry(all);
+      localStorage.removeItem(TRIP_KEY_PREFIX + t.id);
+      render();
+    });
+    return li;
+  }
+
+  if (upcoming.length === 0) ul1.innerHTML = '<li class="empty">No upcoming trips yet — create one above.</li>';
+  else upcoming.forEach(t => ul1.appendChild(row(t)));
+
+  if (past.length === 0) ul2.innerHTML = '<li class="empty">No past trips.</li>';
+  else past.forEach(t => ul2.appendChild(row(t)));
+}
+
+// --- calendar view ---
+
+const VIEW_KEY = "trip-builder-trips-view";
+
+let currentView = localStorage.getItem(VIEW_KEY) || "list";
+
+function parseISO(s) {
+  if (!s) return null;
+  const [y, m, d] = s.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+function fmtISO(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+function addDays(d, n) {
+  const r = new Date(d);
+  r.setDate(r.getDate() + n);
+  return r;
+}
+function sameDay(a, b) {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+function setView(v) {
+  currentView = v;
+  localStorage.setItem(VIEW_KEY, v);
+  document.querySelectorAll("#view-toggle button").forEach(b => {
+    b.classList.toggle("active", b.dataset.view === v);
+  });
+  document.getElementById("list-view").hidden = v !== "list";
+  document.getElementById("calendar-view").hidden = v !== "calendar";
+  if (v === "calendar") renderCalendar();
+}
+
+function readTripBlob(id) {
+  try { return JSON.parse(localStorage.getItem(TRIP_KEY_PREFIX + id) || "null"); }
+  catch (e) { return null; }
+}
+
+function renderCalendar() {
+  const trips = readRegistry().filter(t => t.start && t.end);
+  const container = document.getElementById("calendar-months");
+  container.innerHTML = "";
+
+  if (trips.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "cal-empty";
+    empty.textContent = "No trips with dates yet — create one to see it on the calendar.";
+    container.appendChild(empty);
+    return;
+  }
+
+  // Pre-load each trip's location-lane events so we can label calendar cells
+  // with the actual place names from the timeline view. Pack flights into
+  // stable rows so a multi-leg trip keeps each leg on its own row across all
+  // days (e.g. FRA-ZNZ stays on row 1 on days 18 and 19 instead of jumping
+  // up to row 0 once YVR-FRA ends).
+  const tripLocations = {};
+  const tripFlights = {};
+  trips.forEach(t => {
+    const blob = readTripBlob(t.id);
+    const events = blob?.events || [];
+    tripLocations[t.id] = events.filter(e => e.lane === "location");
+    const flights = events.filter(e =>
+      e.lane === "flights" && !(e.title || "").endsWith("layover"));
+    tripFlights[t.id] = packFlightsIntoRows(flights);
+  });
+
+  const monthSet = new Set();
+  trips.forEach(t => {
+    const s = parseISO(t.start);
+    const e = parseISO(t.end);
+    let cur = new Date(s.getFullYear(), s.getMonth(), 1);
+    const last = new Date(e.getFullYear(), e.getMonth(), 1);
+    while (cur <= last) {
+      monthSet.add(`${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, "0")}`);
+      cur = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
+    }
+  });
+
+  const months = [...monthSet].sort().map(s => {
+    const [y, m] = s.split("-").map(Number);
+    return new Date(y, m - 1, 1);
+  });
+
+  months.forEach(monthDate => container.appendChild(renderMonth(monthDate, trips, tripLocations, tripFlights)));
+}
+
+// Assign each flight a stable row index so a flight stays on the same row
+// across every day it touches (and other rows are blank-padded as needed).
+function packFlightsIntoRows(flights) {
+  const sorted = [...flights].sort((a, b) => {
+    if (a.start !== b.start) return a.start.localeCompare(b.start);
+    return (a.startTime || "00:00").localeCompare(b.startTime || "00:00");
+  });
+  const rowEnds = []; // last end-date per row
+  return sorted.map(f => {
+    let row = 0;
+    while (row < rowEnds.length && rowEnds[row] >= f.start) row++;
+    rowEnds[row] = f.end;
+    return { ...f, _row: row };
+  });
+}
+
+// Pull "YVR" / "ZNZ" airport codes out of a flight title like "LH493 YVR → FRA".
+function extractFlightCodes(title) {
+  if (!title) return null;
+  const m = title.match(/\b([A-Z]{3})\s*(?:→|->|-|–)\s*([A-Z]{3})\b/);
+  return m ? { from: m[1], to: m[2] } : null;
+}
+
+// Group flights into chains where each next flight starts on or before the
+// previous chain's last leg ends (a connection on the same day).
+function chainFlights(flights) {
+  if (!flights.length) return [];
+  const sorted = [...flights].sort((a, b) => {
+    if (a.start !== b.start) return a.start.localeCompare(b.start);
+    return (a.startTime || "00:00").localeCompare(b.startTime || "00:00");
+  });
+  const chains = [];
+  let cur = null;
+  for (const f of sorted) {
+    if (!cur) { cur = { flights: [f], start: f.start, end: f.end, color: f.color }; continue; }
+    if (f.start <= cur.end) {
+      cur.flights.push(f);
+      if (f.end > cur.end) cur.end = f.end;
+    } else {
+      chains.push(cur);
+      cur = { flights: [f], start: f.start, end: f.end, color: f.color };
+    }
+  }
+  if (cur) chains.push(cur);
+  for (const c of chains) {
+    const codes = c.flights.map(f => extractFlightCodes(f.title)).filter(Boolean);
+    if (codes.length) {
+      c.from = codes[0].from;
+      c.to = codes[codes.length - 1].to;
+      const stops = [codes[0].from];
+      codes.forEach(co => { if (stops[stops.length - 1] !== co.to) stops.push(co.to); });
+      c.label = stops.length === 2 ? `${stops[0]}–${stops[1]}` : `${c.from}–${c.to}`;
+      c.tooltip = stops.join(" → ");
+    } else {
+      c.label = c.flights[0].title || "Flight";
+      c.tooltip = c.flights.map(f => f.title).join(" · ");
+    }
+  }
+  return chains;
+}
+
+const KNOWN_COLORS = new Set(["indigo","teal","amber","rose","emerald","violet","grey"]);
+function colorClass(c) {
+  return KNOWN_COLORS.has(c) ? `bg-${c}` : "bg-accent";
+}
+
+function renderMonth(monthDate, trips, tripLocations, tripFlights) {
+  const year = monthDate.getFullYear();
+  const month = monthDate.getMonth();
+  const today = new Date();
+
+  const wrap = document.createElement("div");
+  wrap.className = "calendar-wrap";
+  const title = document.createElement("h3");
+  title.className = "cal-month-title";
+  title.textContent = monthDate.toLocaleString(undefined, { month: "long", year: "numeric" });
+  wrap.appendChild(title);
+
+  const grid = document.createElement("div");
+  grid.className = "cal-grid";
+
+  ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].forEach(d => {
+    const h = document.createElement("div");
+    h.className = "cal-dow";
+    h.textContent = d;
+    grid.appendChild(h);
+  });
+
+  const firstOfMonth = new Date(year, month, 1);
+  const gridStart = addDays(firstOfMonth, -firstOfMonth.getDay());
+
+  for (let i = 0; i < 42; i++) {
+    const day = addDays(gridStart, i);
+    const cell = document.createElement("div");
+    cell.className = "cal-day";
+    if (day.getMonth() !== month) cell.classList.add("other-month");
+    if (sameDay(day, today)) cell.classList.add("today");
+
+    const num = document.createElement("span");
+    num.className = "cal-day-num";
+    num.textContent = day.getDate();
+    cell.appendChild(num);
+
+    const dayISO = fmtISO(day);
+    const dow = day.getDay();
+    trips.forEach(t => {
+      if (dayISO < t.start || dayISO > t.end) return;
+      const isWeekStart = dow === 0;
+      const locs = (tripLocations[t.id] || []).filter(e => dayISO >= e.start && dayISO <= e.end);
+      const flightsToday = (tripFlights[t.id] || []).filter(e => dayISO >= e.start && dayISO <= e.end);
+
+      // Preferred labels in order: flights that touch this day rendered at
+      // their stable row index (with empty-row spacers so a flight stays in
+      // the same vertical position across all its days), then "Where"
+      // events, then a trip-name fallback so the trip is still visible on
+      // bare days.
+      let items;
+      if (flightsToday.length > 0) {
+        const maxRow = Math.max(...flightsToday.map(e => e._row || 0));
+        items = [];
+        for (let r = 0; r <= maxRow; r++) {
+          const f = flightsToday.find(e => (e._row || 0) === r);
+          if (f) {
+            const codes = extractFlightCodes(f.title);
+            const label = codes ? `${codes.from}–${codes.to}` : (f.title || "Flight");
+            items.push({
+              label,
+              start: f.start,
+              end: f.end,
+              color: f.color || "indigo",
+              href: tripUrl(t),
+              tooltip: `${f.title} — ${t.name}`,
+            });
+          } else {
+            items.push({ _spacer: true });
+          }
+        }
+      } else if (locs.length > 0) {
+        items = locs.map(e => ({
+          label: e.title,
+          start: e.start,
+          end: e.end,
+          color: e.color || "violet",
+          href: tripUrl(t),
+          tooltip: `${e.title} — ${t.name} (${e.start}${e.end !== e.start ? ` → ${e.end}` : ""})`,
+        }));
+      } else {
+        items = [{
+          label: t.name || "Untitled",
+          start: t.start,
+          end: t.end,
+          color: "accent",
+          href: tripUrl(t),
+          tooltip: `${t.name || "Untitled"} (${t.start} → ${t.end})`,
+        }];
+      }
+
+      items.forEach(item => {
+        if (item._spacer) {
+          // Reserve vertical slot so the flight below stays at its row.
+          const sp = document.createElement("div");
+          sp.className = "cal-trip cal-spacer";
+          cell.appendChild(sp);
+          return;
+        }
+        const bar = document.createElement("a");
+        bar.className = `cal-trip ${colorClass(item.color)}`;
+        bar.href = item.href;
+        bar.textContent = item.label;
+        bar.title = item.tooltip;
+        if (dayISO !== item.start && !isWeekStart) bar.classList.add("continued");
+        if (dayISO !== item.end && dow !== 6) bar.classList.add("continues");
+        cell.appendChild(bar);
+      });
+    });
+
+    grid.appendChild(cell);
+  }
+
+  wrap.appendChild(grid);
+  return wrap;
+}
+
+document.getElementById("view-toggle").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-view]");
+  if (!btn) return;
+  setView(btn.dataset.view);
+});
+document.getElementById("new-trip-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const name = document.getElementById("nt-name").value.trim();
+  const start = document.getElementById("nt-start").value || null;
+  const end = document.getElementById("nt-end").value || null;
+  if (!name) return;
+  const id = newTripId();
+  const list = readRegistry();
+  const slug = uniqueSlug(name, new Set(list.map(t => t.slug).filter(Boolean)));
+  const trip = { id, slug, name, start, end };
+  list.push(trip);
+  writeRegistry(list);
+  // Seed the per-trip blob so the editor finds something to load.
+  localStorage.setItem(TRIP_KEY_PREFIX + id, JSON.stringify({
+    name, start, end,
+    tzAware: true,
+    events: [],
+    options: [],
+    activeView: "main",
+    shrunkDays: [],
+  }));
+  window.location.href = tripUrl(trip);
+});
+
+ensureAllSlugs();
+cleanupBookendsOnce();
+render();
+setView(currentView);
+</script>
 </body>
 </html>
