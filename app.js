@@ -10,8 +10,26 @@ const REGISTRY_KEY = "trip-builder-trips";
 const TRIP_KEY_PREFIX = "trip-builder-trip-";
 
 let CURRENT_TRIP_ID = null;
+let CURRENT_HAS_PRICE_KEY = false;  // ?k=<token> matched the priced file
 function STORAGE_KEY_FOR(id) { return TRIP_KEY_PREFIX + id; }
 function STORAGE_KEY() { return STORAGE_KEY_FOR(CURRENT_TRIP_ID); }
+
+function safeParse(s) { try { return JSON.parse(s); } catch (e) { return null; } }
+
+async function fetchServerState(slug, priceKey) {
+  const tryFetch = async (path) => {
+    try {
+      const res = await fetch(path, { cache: "no-cache" });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch (e) { return null; }
+  };
+  if (priceKey) {
+    const priced = await tryFetch(`data/${slug}-prices-${priceKey}.json`);
+    if (priced) return priced;
+  }
+  return await tryFetch(`data/${slug}.json`);
+}
 
 function readRegistry() {
   try {
@@ -157,6 +175,8 @@ function load() {
 }
 
 function save() {
+  state.modifiedAt = Date.now();
+  state.localDirty = true;
   localStorage.setItem(STORAGE_KEY(), JSON.stringify(state));
   upsertRegistry({
     id: CURRENT_TRIP_ID,
@@ -164,6 +184,78 @@ function save() {
     start: state.start || null,
     end: state.end || null,
   });
+  updateExportIndicator();
+}
+
+function updateExportIndicator() {
+  const btn = document.getElementById("export-btn");
+  if (!btn) return;
+  btn.classList.toggle("dirty", !!state.localDirty);
+}
+
+// Pricing fields stripped from the public export (same fields the Pricing tab
+// reads/writes — see line-item / split definitions above).
+const PRICING_KEYS = ["lineItems", "priceSplit"];
+
+function stripPricing(obj) {
+  const copy = JSON.parse(JSON.stringify(obj));
+  for (const k of PRICING_KEYS) delete copy[k];
+  return copy;
+}
+
+function tripSlug() {
+  const list = readRegistry();
+  const t = list.find(x => x.id === CURRENT_TRIP_ID);
+  return t?.slug || CURRENT_TRIP_ID;
+}
+
+function ensurePriceToken() {
+  if (state.priceToken) return state.priceToken;
+  const bytes = new Uint8Array(8);
+  crypto.getRandomValues(bytes);
+  state.priceToken = Array.from(bytes, b => b.toString(16).padStart(2, "0")).join("");
+  // Persist directly without bumping modifiedAt — token isn't user-visible state.
+  localStorage.setItem(STORAGE_KEY(), JSON.stringify(state));
+  return state.priceToken;
+}
+
+function downloadJson(filename, obj) {
+  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function exportTrip() {
+  const slug = tripSlug();
+  const token = ensurePriceToken();
+  // Mark exported snapshot as "clean" — the file we just downloaded matches
+  // current state. Loading on another device will see the same modifiedAt and
+  // not show an unsaved indicator there either.
+  state.localDirty = false;
+  localStorage.setItem(STORAGE_KEY(), JSON.stringify(state));
+  updateExportIndicator();
+
+  const publicBlob = stripPricing(state);
+  const pricedBlob = JSON.parse(JSON.stringify(state));
+  downloadJson(`${slug}.json`, publicBlob);
+  downloadJson(`${slug}-prices-${token}.json`, pricedBlob);
+
+  const ownerUrl = `${location.origin}${location.pathname}?id=${encodeURIComponent(slug)}&k=${token}`;
+  const publicUrl = `${location.origin}${location.pathname}?id=${encodeURIComponent(slug)}`;
+  const tripName = state.name || slug;
+  const text =
+    `${tripName}\n` +
+    `Public: ${publicUrl}\n` +
+    `Owner (with prices): ${ownerUrl}`;
+  // Google Voice deeplink — opens GV in a new tab pre-filled, user hits Send.
+  const gvUrl = `https://voice.google.com/u/0/?action=sms&phone=${encodeURIComponent("+17629301525")}&text=${encodeURIComponent(text)}`;
+  window.open(gvUrl, "_blank", "noopener");
 }
 
 function seed() {
@@ -1318,15 +1410,17 @@ function renderTodoList() {
 
   const tentative = state.events.filter(e => e.tentative)
     .sort((a, b) => (a.start || "").localeCompare(b.start || ""));
+  // Panel stays visible even with zero tentative items, so the "+ Add to-do
+  // item" input at the bottom is always reachable. Bundle/list cleanup still
+  // runs.
+  panel.hidden = false;
   if (tentative.length === 0) {
-    panel.hidden = true;
     list.innerHTML = "";
     todoSelection.clear();
     state.todoBundles = state.todoBundles.filter(b =>
       b.eventIds.some(id => state.events.find(e => e.id === id)?.tentative));
     return;
   }
-  panel.hidden = false;
   list.innerHTML = "";
 
   // Drop bundles that no longer have any tentative members.
@@ -1738,6 +1832,7 @@ document.getElementById("tz-aware").addEventListener("change", (e) => {
   renderApp();
 });
 document.getElementById("add-event-btn").addEventListener("click", () => openEventDialog(null));
+document.getElementById("export-btn")?.addEventListener("click", exportTrip);
 
 // --- flight paste/parser ---
 
@@ -3028,13 +3123,19 @@ function renderApp() {
     }
   }
 
-  // Tab buttons & panel visibility
+  // Pricing is gated behind ?k=<token>. Public viewers don't see the tab,
+  // and if their stored activeView was "pricing" we silently fall back to main.
+  const pricingAllowed = CURRENT_HAS_PRICE_KEY;
+  if (!pricingAllowed && state.activeView === "pricing") state.activeView = "main";
   document.querySelectorAll(".tab-btn").forEach(b => {
+    if (b.dataset.tab === "pricing") b.hidden = !pricingAllowed;
     b.classList.toggle("active", b.dataset.tab === state.activeView);
   });
   document.getElementById("tab-main").hidden = state.activeView !== "main";
-  document.getElementById("tab-pricing").hidden = state.activeView !== "pricing";
+  document.getElementById("tab-pricing").hidden = !pricingAllowed || state.activeView !== "pricing";
   document.getElementById("tab-options").hidden = state.activeView !== "options";
+
+  updateExportIndicator();
 
   if (state.activeView === "main") render();
   else if (state.activeView === "pricing") renderPricing();
@@ -3051,12 +3152,28 @@ document.querySelectorAll(".tab-btn").forEach(btn => {
   });
 });
 
-// Open the standard event dialog with tentative pre-checked so a brand-new
-// "to-do" item lands in the to-do panel immediately after save.
-document.getElementById("todo-add-btn")?.addEventListener("click", () => {
-  openEventDialog(null, null);
-  const t = document.getElementById("event-tentative");
-  if (t) t.checked = true;
+document.getElementById("todo-add-form")?.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const input = document.getElementById("todo-add-input");
+  const title = input.value.trim();
+  if (!title) return;
+  // A free-form to-do has no firm date or lane yet — drop it on the activities
+  // lane for the trip's start so it sorts to the top and can be edited later.
+  const day = state.start || new Date().toISOString().slice(0, 10);
+  state.events.push({
+    id: uid(),
+    title,
+    lane: "activities",
+    color: "violet",
+    start: day,
+    end: day,
+    tentative: true,
+  });
+  input.value = "";
+  save();
+  renderApp();
+  // Re-focus so the user can keep adding items.
+  document.getElementById("todo-add-input")?.focus();
 });
 
 document.getElementById("pricing-add-btn")?.addEventListener("click", addPricingLineItem);
@@ -3231,11 +3348,30 @@ async function bootstrap() {
   // Prefer ?id=<slug> (the new clean URL); fall back to ?trip=<id> for any
   // older bookmarks. Both resolve through the registry to the underlying id.
   const slug = params.get("id");
+  const priceKey = params.get("k");
   let tripId = params.get("trip");
   if (slug && !tripId) {
     const list = readRegistry();
     const hit = list.find(t => t.slug === slug) || list.find(t => t.id === slug);
     if (hit) tripId = hit.id;
+  }
+
+  // Cross-device load: if we have a slug but no local trip for it, try the
+  // committed JSON in data/. The priced file (with ?k=<token>) wins when
+  // present; otherwise the public file is enough to bootstrap a viewer.
+  let serverState = null;
+  if (slug) {
+    serverState = await fetchServerState(slug, priceKey);
+    if (!tripId && serverState) {
+      tripId = newTripId();
+      upsertRegistry({
+        id: tripId,
+        slug,
+        name: serverState.name || "Untitled trip",
+        start: serverState.start || null,
+        end: serverState.end || null,
+      });
+    }
   }
 
   // If neither resolved, recover: migrated id, then first registry entry,
@@ -3262,6 +3398,41 @@ async function bootstrap() {
   }
 
   CURRENT_TRIP_ID = tripId;
+  // Owner mode = either ?k= matched the priced server file, or the trip was
+  // already in local storage on this device (so this is the editing device).
+  // The latter covers the "first edit, never exported yet" case where no
+  // token exists anywhere yet.
+  const localExisted = !!localStorage.getItem(STORAGE_KEY_FOR(tripId));
+  CURRENT_HAS_PRICE_KEY =
+    localExisted ||
+    !!(priceKey && serverState && serverState.priceToken === priceKey);
+
+  // Newest-wins merge against the committed file. Priced file → full overwrite.
+  // Public file → pull non-pricing fields only, so the owner doesn't lose their
+  // local pricing edits if they happen to load the public URL on their editing
+  // device.
+  if (serverState) {
+    const localRaw = localStorage.getItem(STORAGE_KEY_FOR(tripId));
+    const localMtime = localRaw ? (safeParse(localRaw)?.modifiedAt || 0) : 0;
+    const serverMtime = serverState.modifiedAt || 0;
+    if (serverMtime >= localMtime) {
+      let merged;
+      if (CURRENT_HAS_PRICE_KEY) {
+        merged = { ...serverState, localDirty: false };
+      } else {
+        const local = localRaw ? safeParse(localRaw) : null;
+        merged = { ...serverState, localDirty: false };
+        // Preserve any locally-stored pricing data + token across a public pull.
+        if (local) {
+          for (const k of PRICING_KEYS) {
+            if (local[k] !== undefined) merged[k] = local[k];
+          }
+          if (local.priceToken) merged.priceToken = local.priceToken;
+        }
+      }
+      localStorage.setItem(STORAGE_KEY_FOR(tripId), JSON.stringify(merged));
+    }
+  }
 
   const importPath = params.get("import");
   if (importPath) {

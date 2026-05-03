@@ -29,6 +29,7 @@
         <span>Follow timezone</span>
       </label>
       <button id="add-event-btn" type="button">+ Add event</button>
+      <button id="export-btn" type="button" class="ghost" title="Download JSON to commit to data/">Export</button>
     </div>
   </header>
 
@@ -53,7 +54,9 @@
           <h2>To do — still need to book</h2>
         </summary>
         <ul id="todo-list" class="todo-list"></ul>
-        <button id="todo-add-btn" type="button" class="todo-add-btn">+ Add to-do item</button>
+        <form id="todo-add-form" class="todo-add-form">
+          <input id="todo-add-input" type="text" placeholder="+ Add to-do item" autocomplete="off" />
+        </form>
       </details>
 
       <section class="panel">

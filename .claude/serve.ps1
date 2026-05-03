@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$port = 5173
+$port = if ($env:PORT) { [int]$env:PORT } else { 5173 }
 
 $mime = @{
   ".html" = "text/html; charset=utf-8"
