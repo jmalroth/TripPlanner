@@ -10,25 +10,59 @@ const REGISTRY_KEY = "trip-builder-trips";
 const TRIP_KEY_PREFIX = "trip-builder-trip-";
 
 let CURRENT_TRIP_ID = null;
-let CURRENT_HAS_PRICE_KEY = false;  // ?k=<token> matched the priced file
+let IS_OWNER = false;  // password matched on this device → can edit + sees pricing
 function STORAGE_KEY_FOR(id) { return TRIP_KEY_PREFIX + id; }
 function STORAGE_KEY() { return STORAGE_KEY_FOR(CURRENT_TRIP_ID); }
 
 function safeParse(s) { try { return JSON.parse(s); } catch (e) { return null; } }
 
-async function fetchServerState(slug, priceKey) {
-  const tryFetch = async (path) => {
-    try {
-      const res = await fetch(path, { cache: "no-cache" });
-      if (!res.ok) return null;
-      return await res.json();
-    } catch (e) { return null; }
-  };
-  if (priceKey) {
-    const priced = await tryFetch(`data/${slug}-prices-${priceKey}.json`);
-    if (priced) return priced;
+const OWNER_PASSWORD_KEY = "trip-builder-owner-password";
+function getOwnerPassword() { return localStorage.getItem(OWNER_PASSWORD_KEY) || null; }
+function setOwnerPassword(pw) {
+  if (pw) localStorage.setItem(OWNER_PASSWORD_KEY, pw);
+  else localStorage.removeItem(OWNER_PASSWORD_KEY);
+}
+
+// Fetch a trip from the worker. Returns { ok, status, body }. The caller
+// decides what to do with 401/404/etc. — fetchTrip itself never throws.
+async function fetchTrip(slug) {
+  const headers = {};
+  const pw = getOwnerPassword();
+  if (pw) headers["Authorization"] = `Bearer ${pw}`;
+  try {
+    const res = await fetch(`${SNAPSHOT_API}/${encodeURIComponent(slug)}`, { headers, cache: "no-cache" });
+    if (res.status === 200) return { ok: true, status: 200, body: await res.json() };
+    return { ok: false, status: res.status };
+  } catch (e) {
+    return { ok: false, status: 0, error: e.message };
   }
-  return await tryFetch(`data/${slug}.json`);
+}
+
+async function putTrip(slug, blob) {
+  const pw = getOwnerPassword();
+  if (!pw) return { ok: false, status: 401 };
+  try {
+    const res = await fetch(`${SNAPSHOT_API}/${encodeURIComponent(slug)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${pw}` },
+      body: JSON.stringify(blob),
+    });
+    return { ok: res.ok, status: res.status };
+  } catch (e) {
+    return { ok: false, status: 0, error: e.message };
+  }
+}
+
+// Prompt for the owner password. Stored in localStorage so it sticks across
+// sessions on this device. Returns the password or null if cancelled.
+async function promptForPassword(reason) {
+  const msg = reason
+    ? `${reason}\n\nEnter the owner password to enable editing on this device:`
+    : "Enter the owner password to enable editing on this device:";
+  const pw = prompt(msg);
+  if (!pw) return null;
+  setOwnerPassword(pw);
+  return pw;
 }
 
 function readRegistry() {
@@ -174,14 +208,12 @@ function load() {
   }
 }
 
-// Set when bootstrapping from ?snap=<id> — disables persistence so a viewer
-// browsing a shared snapshot doesn't pollute their localStorage or trip list.
-let SNAPSHOT_VIEW = false;
+// True while bootstrapping is loading the trip — suppresses syncs that would
+// fire from save() calls inside the load itself.
+let BOOTING = true;
 
 function save() {
-  if (SNAPSHOT_VIEW) return;
   state.modifiedAt = Date.now();
-  state.localDirty = true;
   localStorage.setItem(STORAGE_KEY(), JSON.stringify(state));
   upsertRegistry({
     id: CURRENT_TRIP_ID,
@@ -189,18 +221,70 @@ function save() {
     start: state.start || null,
     end: state.end || null,
   });
-  updateExportIndicator();
+  if (!BOOTING) scheduleSync();
+  updateSyncIndicator();
 }
 
-function updateExportIndicator() {
-  const btn = document.getElementById("export-btn");
-  if (!btn) return;
-  btn.classList.toggle("dirty", !!state.localDirty);
+let SYNC_TIMER = null;
+let SYNC_PENDING = false;
+let SYNC_LAST_STATUS = null;  // "saved" | "saving" | "error" | null
+
+function scheduleSync() {
+  SYNC_PENDING = true;
+  updateSyncIndicator();
+  clearTimeout(SYNC_TIMER);
+  SYNC_TIMER = setTimeout(syncNow, 1500);
+}
+
+async function syncNow() {
+  SYNC_PENDING = false;
+  const slug = tripSlug();
+  if (!slug) return;
+  // First edit on a fresh device: ask for the password so we can sync. Cancel
+  // means "viewer mode on this device" — local edits stay local.
+  if (!getOwnerPassword()) {
+    const pw = await promptForPassword("Editing this trip on a new device.");
+    if (!pw) { SYNC_LAST_STATUS = null; updateSyncIndicator(); return; }
+  }
+  SYNC_LAST_STATUS = "saving";
+  updateSyncIndicator();
+  const res = await putTrip(slug, state);
+  if (res.ok) {
+    IS_OWNER = true;
+    SYNC_LAST_STATUS = "saved";
+    renderApp();  // pricing tab may need to appear
+  } else if (res.status === 401) {
+    SYNC_LAST_STATUS = "error";
+    setOwnerPassword(null);
+    const pw = await promptForPassword("That password didn't work.");
+    if (pw) scheduleSync();
+  } else {
+    SYNC_LAST_STATUS = "error";
+  }
+  updateSyncIndicator();
+}
+
+function updateSyncIndicator() {
+  const el = document.getElementById("sync-indicator");
+  if (!el) return;
+  if (!IS_OWNER) { el.textContent = "View only"; el.className = "sync-indicator viewer"; return; }
+  if (SYNC_PENDING) { el.textContent = "Unsaved…"; el.className = "sync-indicator pending"; return; }
+  if (SYNC_LAST_STATUS === "saving") { el.textContent = "Saving…"; el.className = "sync-indicator pending"; return; }
+  if (SYNC_LAST_STATUS === "error") { el.textContent = "Sync error"; el.className = "sync-indicator error"; return; }
+  if (SYNC_LAST_STATUS === "saved") { el.textContent = "Saved"; el.className = "sync-indicator saved"; return; }
+  el.textContent = "";
+  el.className = "sync-indicator";
+}
+
+function tripSlug() {
+  const list = readRegistry();
+  const t = list.find(x => x.id === CURRENT_TRIP_ID);
+  return t?.slug || null;
 }
 
 // Pricing fields stripped from the public export (same fields the Pricing tab
 // reads/writes — see line-item / split definitions above).
-const PRICING_KEYS = ["lineItems", "priceSplit"];
+const PRICING_KEYS = ["lineItems", "priceSplit", "priceToken"];
 
 function stripPricing(obj) {
   const copy = JSON.parse(JSON.stringify(obj));
@@ -208,102 +292,35 @@ function stripPricing(obj) {
   return copy;
 }
 
-function tripSlug() {
-  const list = readRegistry();
-  const t = list.find(x => x.id === CURRENT_TRIP_ID);
-  return t?.slug || CURRENT_TRIP_ID;
-}
-
-function ensurePriceToken() {
-  if (state.priceToken) return state.priceToken;
-  const bytes = new Uint8Array(8);
-  crypto.getRandomValues(bytes);
-  state.priceToken = Array.from(bytes, b => b.toString(16).padStart(2, "0")).join("");
-  // Persist directly without bumping modifiedAt — token isn't user-visible state.
-  localStorage.setItem(STORAGE_KEY(), JSON.stringify(state));
-  return state.priceToken;
-}
-
-function downloadJson(filename, obj) {
-  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-function exportTrip() {
-  const slug = tripSlug();
-  const token = ensurePriceToken();
-  // Mark exported snapshot as "clean" — the file we just downloaded matches
-  // current state. Loading on another device will see the same modifiedAt and
-  // not show an unsaved indicator there either.
-  state.localDirty = false;
-  localStorage.setItem(STORAGE_KEY(), JSON.stringify(state));
-  updateExportIndicator();
-
-  const publicBlob = stripPricing(state);
-  const pricedBlob = JSON.parse(JSON.stringify(state));
-  downloadJson(`${slug}.json`, publicBlob);
-  downloadJson(`${slug}-prices-${token}.json`, pricedBlob);
-
-  const ownerUrl = `${location.origin}${location.pathname}?id=${encodeURIComponent(slug)}&k=${token}`;
-  const publicUrl = `${location.origin}${location.pathname}?id=${encodeURIComponent(slug)}`;
-  showExportLinks({ publicUrl, ownerUrl, slug, token });
-}
-
-// Cloudflare Worker that stores trip snapshots in KV. See worker/README.md
-// for one-time setup; replace the placeholder below with your deployed URL.
+// Cloudflare Worker — trip storage. See worker/README.md for setup.
 const SNAPSHOT_API = "https://trip-snapshots.daner1231.workers.dev";
 
-async function shareSnapshot() {
-  const btn = document.getElementById("share-btn");
-  const origText = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = "Publishing…";
-  try {
-    if (SNAPSHOT_API.includes("REPLACE_WITH_YOUR_ACCOUNT")) {
-      throw new Error("Snapshot worker URL not configured yet (see worker/README.md)");
-    }
-    const blob = stripPricing(state);
-    const res = await fetch(SNAPSHOT_API, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(blob),
-    });
-    if (!res.ok) throw new Error(`worker ${res.status}`);
-    const { id } = await res.json();
-    if (!id) throw new Error("worker returned no id");
-    const shareUrl = `${location.origin}${location.pathname}?snap=${encodeURIComponent(id)}`;
-    showShareLink(shareUrl);
-  } catch (e) {
-    alert(`Couldn't publish snapshot: ${e.message}`);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = origText;
-  }
+// Share button: copy the canonical trip URL. Viewers reach it and read from
+// the worker (pricing stripped); editors load the same URL but the password
+// stored on their device unlocks pricing + write access.
+function shareTrip() {
+  const slug = tripSlug();
+  if (!slug) { alert("This trip doesn't have a slug yet — give it a name first."); return; }
+  const url = `${location.origin}${location.pathname}?id=${encodeURIComponent(slug)}`;
+  showShareDropdown(url);
 }
 
-function showShareLink(url) {
-  document.getElementById("export-links")?.remove();
+function showShareDropdown(url) {
+  document.getElementById("share-dropdown")?.remove();
   const panel = document.createElement("div");
-  panel.id = "export-links";
+  panel.id = "share-dropdown";
   panel.className = "export-links";
   panel.innerHTML = `
     <div class="export-links-row">
-      <label>Snapshot link (read-only, no prices)</label>
+      <label>Trip link (read-only for viewers)</label>
       <div class="export-links-input">
-        <input type="text" readonly value="" />
+        <input type="text" readonly />
         <button type="button" data-copy>Copy</button>
       </div>
     </div>
     <div class="export-links-files">
-      Anyone with the link can view this trip as it is right now. Future
-      edits won't update this snapshot — click Share again for a fresh link.
+      Send this to anyone — they see the trip without prices. The link always
+      reflects the latest edits, no need to re-share.
     </div>
     <button type="button" class="export-links-close" aria-label="Close">×</button>
   `;
@@ -325,90 +342,6 @@ function showShareLink(url) {
   setTimeout(() => {
     const onDoc = (e) => {
       if (!panel.contains(e.target) && e.target.id !== "share-btn") {
-        panel.remove();
-        document.removeEventListener("click", onDoc);
-      }
-    };
-    document.addEventListener("click", onDoc);
-  }, 0);
-}
-
-function showSnapshotBanner() {
-  // Hide the topbar action buttons that don't make sense in viewer mode, and
-  // drop a banner so the viewer knows their edits won't stick.
-  ["share-btn", "export-btn", "add-event-btn", "trip-display"].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.style.display = "none";
-  });
-  const editRow = document.getElementById("trip-edit-row");
-  if (editRow) editRow.hidden = true;
-  const banner = document.createElement("div");
-  banner.className = "snapshot-banner";
-  const name = state.name ? `"${state.name}"` : "this trip";
-  banner.textContent = `Read-only snapshot of ${name}. Any edits stay in your browser only.`;
-  document.body.insertBefore(banner, document.body.firstChild);
-}
-
-async function fetchSnapshot(id) {
-  const res = await fetch(`${SNAPSHOT_API}/${encodeURIComponent(id)}`);
-  if (!res.ok) throw new Error(`snapshot ${res.status}`);
-  return await res.json();
-}
-
-function showExportLinks({ publicUrl, ownerUrl, slug, token }) {
-  document.getElementById("export-links")?.remove();
-  const panel = document.createElement("div");
-  panel.id = "export-links";
-  panel.className = "export-links";
-  panel.innerHTML = `
-    <div class="export-links-row">
-      <label>Public link (no prices)</label>
-      <div class="export-links-input">
-        <input type="text" readonly value="" data-url="public" />
-        <button type="button" data-copy="public">Copy</button>
-      </div>
-    </div>
-    <div class="export-links-row">
-      <label>Owner link (with prices)</label>
-      <div class="export-links-input">
-        <input type="text" readonly value="" data-url="owner" />
-        <button type="button" data-copy="owner">Copy</button>
-      </div>
-    </div>
-    <div class="export-links-files">
-      Files downloaded: <code></code> + <code></code> — commit to <code>data/</code> to publish.
-    </div>
-    <button type="button" class="export-links-close" aria-label="Close">×</button>
-  `;
-  panel.querySelector('input[data-url=public]').value = publicUrl;
-  panel.querySelector('input[data-url=owner]').value = ownerUrl;
-  const codes = panel.querySelectorAll('.export-links-files code');
-  codes[0].textContent = `${slug}.json`;
-  codes[1].textContent = `${slug}-prices-${token}.json`;
-  panel.querySelectorAll('button[data-copy]').forEach(btn => {
-    btn.addEventListener("click", async () => {
-      const which = btn.dataset.copy;
-      const url = which === "public" ? publicUrl : ownerUrl;
-      try {
-        await navigator.clipboard.writeText(url);
-        const orig = btn.textContent;
-        btn.textContent = "Copied";
-        setTimeout(() => { btn.textContent = orig; }, 1200);
-      } catch (e) {
-        const input = panel.querySelector(`input[data-url=${which}]`);
-        input.select();
-        document.execCommand("copy");
-      }
-    });
-  });
-  panel.querySelector(".export-links-close").addEventListener("click", () => panel.remove());
-  // Position the panel just below the Export button.
-  const btn = document.getElementById("export-btn");
-  btn?.parentElement?.appendChild(panel);
-  // Close on outside click (next tick so the click that opened doesn't catch it).
-  setTimeout(() => {
-    const onDoc = (e) => {
-      if (!panel.contains(e.target) && e.target !== btn) {
         panel.remove();
         document.removeEventListener("click", onDoc);
       }
@@ -1991,8 +1924,7 @@ document.getElementById("tz-aware").addEventListener("change", (e) => {
   renderApp();
 });
 document.getElementById("add-event-btn").addEventListener("click", () => openEventDialog(null));
-document.getElementById("export-btn")?.addEventListener("click", exportTrip);
-document.getElementById("share-btn")?.addEventListener("click", shareSnapshot);
+document.getElementById("share-btn")?.addEventListener("click", shareTrip);
 
 // --- flight paste/parser ---
 
@@ -3283,9 +3215,9 @@ function renderApp() {
     }
   }
 
-  // Pricing is gated behind ?k=<token>. Public viewers don't see the tab,
+  // Pricing is gated behind the owner password. Viewers don't see the tab,
   // and if their stored activeView was "pricing" we silently fall back to main.
-  const pricingAllowed = CURRENT_HAS_PRICE_KEY;
+  const pricingAllowed = IS_OWNER;
   if (!pricingAllowed && state.activeView === "pricing") state.activeView = "main";
   document.querySelectorAll(".tab-btn").forEach(b => {
     if (b.dataset.tab === "pricing") b.hidden = !pricingAllowed;
@@ -3295,7 +3227,7 @@ function renderApp() {
   document.getElementById("tab-pricing").hidden = !pricingAllowed || state.activeView !== "pricing";
   document.getElementById("tab-options").hidden = state.activeView !== "options";
 
-  updateExportIndicator();
+  updateSyncIndicator();
 
   if (state.activeView === "main") render();
   else if (state.activeView === "pricing") renderPricing();
@@ -3501,48 +3433,24 @@ document.getElementById("option-range-end").addEventListener("change", (e) => {
 
 async function bootstrap() {
   const params = new URLSearchParams(window.location.search);
+  migrateLegacy();
 
-  // ?snap=<jsonblob-id> — read-only viewer mode. Fetch the snapshot, populate
-  // state in memory, hide pricing, and short-circuit the normal flow so the
-  // viewer's localStorage and trip list aren't touched.
-  const snapId = params.get("snap");
-  if (snapId) {
-    SNAPSHOT_VIEW = true;
-    try {
-      const blob = await fetchSnapshot(snapId);
-      Object.assign(state, blob);
-      if (!state.options) state.options = [];
-      if (!state.activeView) state.activeView = "main";
-      if (!state.shrunkDays) state.shrunkDays = [];
-      CURRENT_HAS_PRICE_KEY = false;  // snapshots never carry pricing
-      renderApp();
-      showSnapshotBanner();
-    } catch (e) {
-      document.body.innerHTML = `<div style="padding:40px;font:14px system-ui">Couldn't load snapshot: ${e.message}</div>`;
-    }
-    return;
-  }
-
-  // One-time migration of any legacy single-trip blob into the registry.
-  const migratedId = migrateLegacy();
-
-  // Prefer ?id=<slug> (the new clean URL); fall back to ?trip=<id> for any
-  // older bookmarks. Both resolve through the registry to the underlying id.
   const slug = params.get("id");
-  const priceKey = params.get("k");
   let tripId = params.get("trip");
+
   if (slug && !tripId) {
     const list = readRegistry();
     const hit = list.find(t => t.slug === slug) || list.find(t => t.id === slug);
     if (hit) tripId = hit.id;
   }
 
-  // Cross-device load: if we have a slug but no local trip for it, try the
-  // committed JSON in data/. The priced file (with ?k=<token>) wins when
-  // present; otherwise the public file is enough to bootstrap a viewer.
+  // Pull the trip from the worker (always, even if we have it locally — newer
+  // wins). When it's a slug we've never seen on this device, the worker is
+  // how we discover it: provision a registry entry on the fly.
   let serverState = null;
   if (slug) {
-    serverState = await fetchServerState(slug, priceKey);
+    const res = await fetchTrip(slug);
+    if (res.ok) serverState = res.body;
     if (!tripId && serverState) {
       tripId = newTripId();
       upsertRegistry({
@@ -3555,22 +3463,15 @@ async function bootstrap() {
     }
   }
 
-  // If neither resolved, recover: migrated id, then first registry entry,
-  // otherwise punt to the trips landing page.
   if (!tripId) {
-    if (migratedId) {
-      tripId = migratedId;
-    } else {
-      const list = readRegistry();
-      if (list.length > 0) {
-        tripId = list[0].id;
-      } else {
-        window.location.replace("./");
-        return;
-      }
-    }
     const list = readRegistry();
-    const trip = list.find(t => t.id === tripId);
+    if (list.length > 0) {
+      tripId = list[0].id;
+    } else {
+      window.location.replace("./");
+      return;
+    }
+    const trip = readRegistry().find(t => t.id === tripId);
     const url = new URL(window.location.href);
     url.searchParams.delete("trip");
     url.searchParams.set("id", trip?.slug || tripId);
@@ -3579,75 +3480,54 @@ async function bootstrap() {
   }
 
   CURRENT_TRIP_ID = tripId;
-  // Owner mode = either ?k= matched the priced server file, or the trip was
-  // already in local storage on this device (so this is the editing device).
-  // The latter covers the "first edit, never exported yet" case where no
-  // token exists anywhere yet.
-  const localExisted = !!localStorage.getItem(STORAGE_KEY_FOR(tripId));
-  CURRENT_HAS_PRICE_KEY =
-    localExisted ||
-    !!(priceKey && serverState && serverState.priceToken === priceKey);
 
-  // Newest-wins merge against the committed file. Priced file → full overwrite.
-  // Public file → pull non-pricing fields only, so the owner doesn't lose their
-  // local pricing edits if they happen to load the public URL on their editing
-  // device.
+  // Owner mode if any of:
+  //   1. A password is stored on this device (we trust it; a 401 on the
+  //      next sync will clear it and reprompt).
+  //   2. The worker returned pricing fields (it only does that for valid
+  //      auth, so the password is already accepted).
+  //   3. localStorage already has pricing fields for this trip (covers the
+  //      pre-worker user who's editing on their original device).
+  const serverHasPricing = serverState && PRICING_KEYS.some(k => serverState[k] !== undefined);
+  const localBlob = safeParse(localStorage.getItem(STORAGE_KEY_FOR(tripId)));
+  const localHasPricing = localBlob && PRICING_KEYS.some(k => localBlob[k] !== undefined);
+  IS_OWNER = !!getOwnerPassword() || serverHasPricing || localHasPricing;
+
+  // Newest-wins merge: server wins if its modifiedAt is newer-or-equal.
+  // Public reads (no pricing) preserve any locally-stored pricing fields so a
+  // viewer-mode load on the editor's device doesn't nuke their prices.
   if (serverState) {
     const localRaw = localStorage.getItem(STORAGE_KEY_FOR(tripId));
     const localMtime = localRaw ? (safeParse(localRaw)?.modifiedAt || 0) : 0;
     const serverMtime = serverState.modifiedAt || 0;
     if (serverMtime >= localMtime) {
-      let merged;
-      if (CURRENT_HAS_PRICE_KEY) {
-        merged = { ...serverState, localDirty: false };
-      } else {
+      let merged = { ...serverState };
+      if (!IS_OWNER) {
         const local = localRaw ? safeParse(localRaw) : null;
-        merged = { ...serverState, localDirty: false };
-        // Preserve any locally-stored pricing data + token across a public pull.
-        if (local) {
-          for (const k of PRICING_KEYS) {
-            if (local[k] !== undefined) merged[k] = local[k];
-          }
-          if (local.priceToken) merged.priceToken = local.priceToken;
+        if (local) for (const k of PRICING_KEYS) {
+          if (local[k] !== undefined) merged[k] = local[k];
         }
       }
       localStorage.setItem(STORAGE_KEY_FOR(tripId), JSON.stringify(merged));
     }
   }
 
-  const importPath = params.get("import");
-  if (importPath) {
-    try {
-      const res = await fetch(importPath);
-      if (!res.ok) throw new Error(`fetch failed ${res.status}`);
-      const text = await res.text();
-      JSON.parse(text);
-      localStorage.setItem(STORAGE_KEY(), text);
-      const url = new URL(window.location.href);
-      url.searchParams.delete("import");
-      window.location.replace(url.toString());
-      return;
-    } catch (e) {
-      console.error("Import failed:", e);
-      alert(`Import failed: ${e.message}`);
-    }
-  }
-  // If the page has an embedded snapshot and we have no saved state yet,
-  // pre-populate localStorage from it on first visit.
-  if (typeof EMBEDDED_STATE !== "undefined" && !localStorage.getItem(STORAGE_KEY())) {
-    try {
-      localStorage.setItem(STORAGE_KEY(), JSON.stringify(EMBEDDED_STATE));
-    } catch (e) {
-      console.error("Embedded state load failed:", e);
-    }
-  }
   load();
   if (!state.options) state.options = [];
   if (!state.activeView) state.activeView = "main";
   if (!state.shrunkDays) state.shrunkDays = [];
-  // Migrate stale field from earlier version.
   delete state.expandedDays;
+
+  BOOTING = false;
   renderApp();
+
+  // If this device has no password yet but the trip exists on the worker,
+  // first interaction (not load) will prompt. Push initial state to the
+  // worker if the local copy is newer than what was on the server (covers
+  // the case where they had a local trip from before the worker existed).
+  if (IS_OWNER && (!serverState || (state.modifiedAt || 0) > (serverState.modifiedAt || 0))) {
+    scheduleSync();
+  }
 }
 
 bootstrap();

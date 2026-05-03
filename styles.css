@@ -159,14 +159,17 @@ button.ghost {
   color: var(--muted);
 }
 
-#export-btn.dirty {
-  border-color: var(--accent);
-  color: var(--text);
+.sync-indicator {
+  font-size: 12px;
+  color: var(--muted);
+  min-width: 60px;
+  display: inline-block;
 }
-#export-btn.dirty::before {
-  content: "● ";
-  color: var(--accent);
-}
+.sync-indicator.saving { color: var(--accent); }
+.sync-indicator.pending { color: #b76a00; }
+.sync-indicator.error { color: #b91c1c; }
+.sync-indicator.saved { color: #047a52; }
+.sync-indicator.viewer { color: var(--muted); font-style: italic; }
 
 .actions { position: relative; }
 .export-links {
