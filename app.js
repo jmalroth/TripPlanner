@@ -3547,15 +3547,20 @@ async function bootstrap() {
   CAN_SEE_PRICING = CAN_EDIT || serverHasPricing || localHasPricing;
 
   // Newest-wins merge: server wins if its modifiedAt is newer-or-equal.
-  // Public reads (no pricing) preserve any locally-stored pricing fields so a
-  // viewer-mode load on the editor's device doesn't nuke their prices.
+  // Pricing fields, however, are *only* taken from the server when the server
+  // actually returned them. Otherwise we preserve whatever local has — the
+  // server's silence about pricing means "I'm not authoritative on prices for
+  // this request" (viewer mode, or auth dropped), not "prices have been
+  // deleted." Without this guard, a single viewer-style read on the owner's
+  // device would wipe pricing locally and then write empty pricing back to
+  // the server on next sync.
   if (serverState) {
     const localRaw = localStorage.getItem(STORAGE_KEY_FOR(tripId));
     const localMtime = localRaw ? (safeParse(localRaw)?.modifiedAt || 0) : 0;
     const serverMtime = serverState.modifiedAt || 0;
     if (serverMtime >= localMtime) {
       let merged = { ...serverState };
-      if (!CAN_EDIT) {
+      if (!serverHasPricing) {
         const local = localRaw ? safeParse(localRaw) : null;
         if (local) for (const k of PRICING_KEYS) {
           if (local[k] !== undefined) merged[k] = local[k];
