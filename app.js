@@ -1692,14 +1692,6 @@ document.getElementById("tz-aware").addEventListener("change", (e) => {
   renderApp();
 });
 document.getElementById("add-event-btn").addEventListener("click", () => openEventDialog(null));
-document.getElementById("clear-btn").addEventListener("click", () => {
-  if (!confirm("Clear the trip and all events?")) return;
-  localStorage.removeItem(STORAGE_KEY());
-  for (const k of Object.keys(state)) delete state[k];
-  seed();
-  save();
-  renderApp();
-});
 
 // --- flight paste/parser ---
 
