@@ -780,6 +780,9 @@ main {
 .todo-section > summary::before { content: "▾ "; color: var(--muted); display: inline-block; }
 .todo-section:not([open]) > summary::before { content: "▸ "; }
 .todo-section, .todo-section .todo-list, .todo-section .todo-list li { text-align: left; }
+.todo-section .todo-list li { justify-content: flex-start !important; }
+.todo-section { text-align: left !important; }
+.todo-add-btn { display: block; margin-left: 0; margin-right: auto; text-align: left; }
 .todo-add-btn { margin-top: 10px; padding: 6px 12px; background: transparent; border: 1px dashed var(--line); color: var(--muted); border-radius: 6px; cursor: pointer; font-size: 13px; }
 .todo-add-btn:hover { border-color: var(--accent); color: var(--accent); }
 .todo-list .todo-check { margin: 0; cursor: pointer; flex-shrink: 0; }
