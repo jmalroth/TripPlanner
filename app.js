@@ -841,25 +841,27 @@ function renderPricingLineItems() {
       cost.style.gridColumn = state.priceSplit.groups.length + 1;
       cost.textContent = fmtMoney(lineItemTotal(li));
       right.appendChild(cost);
-      const actions = document.createElement("div");
-      actions.className = "li-actions";
-      const editBtn = document.createElement("button");
-      editBtn.textContent = "Edit";
-      editBtn.addEventListener("click", () => editLineItem(li.id));
-      const delBtn = document.createElement("button");
-      delBtn.textContent = "×";
-      delBtn.className = "danger";
-      delBtn.title = "Delete line item";
-      delBtn.addEventListener("click", () => {
+      // Actions also live in the grid so they align across rows.
+      const actionsCol = document.createElement("span");
+      actionsCol.className = "li-actions";
+      actionsCol.style.gridColumn = state.priceSplit.groups.length + 2;
+      const editBtn2 = document.createElement("button");
+      editBtn2.textContent = "Edit";
+      editBtn2.addEventListener("click", () => editLineItem(li.id));
+      const delBtn2 = document.createElement("button");
+      delBtn2.textContent = "×";
+      delBtn2.className = "danger";
+      delBtn2.title = "Delete line item";
+      delBtn2.addEventListener("click", () => {
         state.lineItems = state.lineItems.filter(x => x.id !== li.id);
         save();
         renderPricing();
       });
-      actions.appendChild(editBtn);
-      actions.appendChild(delBtn);
+      actionsCol.appendChild(editBtn2);
+      actionsCol.appendChild(delBtn2);
+      right.appendChild(actionsCol);
       liEl.appendChild(main);
       liEl.appendChild(right);
-      liEl.appendChild(actions);
       ul.appendChild(liEl);
     }
     group.appendChild(ul);

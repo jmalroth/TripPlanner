@@ -880,7 +880,7 @@ main {
 .pricing-line-items .li-date { color: var(--muted); font-size: 12px; font-weight: normal; }
 .pricing-line-items .li-right {
   display: grid;
-  grid-template-columns: repeat(var(--group-count, 1), minmax(120px, max-content)) auto;
+  grid-template-columns: repeat(var(--group-count, 1), minmax(120px, max-content)) auto auto;
   gap: 6px;
   align-items: center;
   margin-left: auto;
@@ -888,6 +888,7 @@ main {
 .pricing-line-items .li-right .group-pill { justify-self: end; }
 .pricing-line-items .li-right .group-pill.empty { visibility: hidden; padding: 2px 8px; }
 .pricing-line-items .li-right .li-cost { margin-left: 12px; }
+.pricing-line-items .li-right .li-actions { display: flex; gap: 4px; margin-left: 12px; justify-self: end; }
 
 .group-pill {
   display: inline-flex; align-items: center;
@@ -904,6 +905,11 @@ main {
 .group-pill.bg-teal,    .group-pill.outline-teal    { color: var(--teal-rim);    border-color: var(--teal); }
 .group-pill.bg-violet,  .group-pill.outline-violet  { color: var(--violet-rim);  border-color: var(--violet); }
 .group-pill.bg-grey,    .group-pill.outline-grey    { color: var(--grey-rim);    border-color: var(--grey); }
+.group-pill.bg-sky,     .group-pill.outline-sky     { color: var(--sky-rim);     border-color: var(--sky); }
+.group-pill.bg-pink,    .group-pill.outline-pink    { color: var(--pink-rim);    border-color: var(--pink); }
+.group-pill.bg-lime,    .group-pill.outline-lime    { color: var(--lime-rim);    border-color: var(--lime); }
+.group-pill.bg-orange,  .group-pill.outline-orange  { color: var(--orange-rim);  border-color: var(--orange); }
+.group-pill.bg-cyan,    .group-pill.outline-cyan    { color: var(--cyan-rim);    border-color: var(--cyan); }
 .group-pill.overridden { box-shadow: inset 0 0 0 1.5px currentColor; }
 .group-pill.summary-pill { padding: 4px 12px; font-size: 13px; }
 .pricing-summary-groups { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-right: 8px; }
