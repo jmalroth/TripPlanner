@@ -762,6 +762,10 @@ main {
 .todo-list .todo-swatch { width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0; background-image: repeating-linear-gradient(45deg, rgba(255,255,255,0.55) 0, rgba(255,255,255,0.55) 3px, transparent 3px, transparent 6px); }
 .todo-list .todo-title { font-weight: 600; }
 .todo-list .todo-meta { color: var(--muted); font-size: 12px; }
+.todo-section > summary { list-style: none; cursor: pointer; }
+.todo-section > summary::-webkit-details-marker { display: none; }
+.todo-section > summary::before { content: "▾ "; color: var(--muted); display: inline-block; }
+.todo-section:not([open]) > summary::before { content: "▸ "; }
 .todo-list .todo-check { margin: 0; cursor: pointer; flex-shrink: 0; }
 .todo-list li.bundle { background: var(--panel); border: 1px solid var(--accent); border-radius: 8px; flex-direction: column; align-items: stretch; gap: 0; padding: 0; }
 .todo-list li.bundle .bundle-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; cursor: pointer; }
@@ -790,7 +794,9 @@ main {
 .pricing-pill.selected { outline: 2px solid var(--accent); outline-offset: 1px; }
 .pricing-pill.in-line-item { opacity: 0.45; cursor: not-allowed; text-decoration: line-through; }
 .pricing-pill .pill-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-.pricing-split-section { margin-bottom: 14px; }
+.pricing-split-section { margin-bottom: 14px; text-align: left; }
+.pricing-split-section .pricing-split-rows,
+.pricing-split-section .split-actions { justify-content: flex-start; }
 .pricing-split-section > summary { list-style: none; cursor: pointer; }
 .pricing-split-section > summary::-webkit-details-marker { display: none; }
 .pricing-split-section > summary::before { content: "▸ "; color: var(--muted); display: inline-block; transition: transform 0.1s; }
@@ -805,6 +811,10 @@ main {
 .pricing-split-row .group-share { width: 110px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 4px; font-size: 13px; }
 .pricing-split-row .group-pct { min-width: 60px; font-weight: 600; font-size: 13px; }
 .pricing-split-row .group-pct.invalid { color: #b91c1c; font-weight: normal; font-size: 12px; }
+.pricing-split-row .group-color-swatches { display: inline-flex; gap: 3px; }
+.pricing-split-row .color-swatch { width: 16px; height: 16px; padding: 0; border-radius: 50%; border: 2px solid transparent; cursor: pointer; }
+.pricing-split-row .color-swatch:hover { transform: scale(1.15); }
+.pricing-split-row .color-swatch.selected { border-color: var(--text); box-shadow: 0 0 0 1px var(--bg) inset; }
 .pricing-split-row .group-remove { background: transparent; border: 1px solid var(--line); color: var(--muted); padding: 2px 8px; border-radius: 4px; cursor: pointer; font-size: 14px; }
 .pricing-split-row .group-remove:hover { color: #b12a48; border-color: #b12a48; }
 .split-actions { display: flex; gap: 12px; align-items: center; }
@@ -868,6 +878,10 @@ main {
 .group-pill.overridden { box-shadow: inset 0 0 0 1.5px currentColor; }
 .group-pill.summary-pill { padding: 4px 12px; font-size: 13px; }
 .pricing-summary-groups { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-right: 8px; }
+.pricing-summary-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: flex-end; width: 100%; }
+.pricing-summary-total { font-weight: 600; font-size: 18px; color: var(--accent); margin-left: 8px; }
+.pricing-line-items .pricing-group h3 { display: flex; align-items: center; gap: 8px; }
+.pricing-line-items .pricing-group .lane-subtotal-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-left: auto; }
 
 .pricing-summary { display: flex; gap: 24px; padding: 12px 16px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 14px; flex-wrap: wrap; }
 .pricing-summary-tile { display: flex; flex-direction: column; gap: 2px; }

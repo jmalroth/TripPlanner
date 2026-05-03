@@ -741,10 +741,27 @@ function renderPricingLineItems() {
     const group = document.createElement("div");
     group.className = "pricing-group";
     const subtotal = items.reduce((s, li) => s + lineItemTotal(li), 0);
+    // Per-group subtotal for this lane (matches the right-side pills layout).
+    const lanePerGroup = state.priceSplit.groups.map((g, gi) =>
+      items.reduce((s, li) => s + lineItemGroupAmount(li, g.id, gi), 0));
     const h = document.createElement("h3");
-    h.innerHTML = `<span></span><span class="group-total"></span>`;
-    h.querySelector("span").textContent = LANE_LABEL[lane] || lane;
-    h.querySelector(".group-total").textContent = fmtMoney(subtotal);
+    const labelSpan = document.createElement("span");
+    labelSpan.textContent = LANE_LABEL[lane] || lane;
+    h.appendChild(labelSpan);
+    const right = document.createElement("span");
+    right.className = "lane-subtotal-row";
+    state.priceSplit.groups.forEach((g, gi) => {
+      if (!lanePerGroup[gi]) return;
+      const pill = document.createElement("span");
+      pill.className = `group-pill outline-${g.color || "indigo"}`;
+      pill.textContent = `${g.name}: ${fmtMoney(lanePerGroup[gi])}`;
+      right.appendChild(pill);
+    });
+    const subTot = document.createElement("span");
+    subTot.className = "group-total";
+    subTot.textContent = fmtMoney(subtotal);
+    right.appendChild(subTot);
+    h.appendChild(right);
     group.appendChild(h);
     // Sort items chronologically by their earliest event start date.
     items.sort((a, b) => {
@@ -841,26 +858,21 @@ function renderPricingSummary() {
     });
   }
   container.innerHTML = "";
-  // Group pills first (one per default-split group), then booked/tentative/total tiles.
-  const groupRow = document.createElement("div");
-  groupRow.className = "pricing-summary-groups";
+  // Single right-aligned row: per-group pills + grand total inline together.
+  const row = document.createElement("div");
+  row.className = "pricing-summary-row";
   state.priceSplit.groups.forEach((g, idx) => {
-    if (!perGroup[idx]) return; // hide groups with no spending yet
+    if (!perGroup[idx]) return;
     const pill = document.createElement("span");
-    pill.className = `group-pill summary-pill bg-${g.color || "indigo"}`;
+    pill.className = `group-pill summary-pill outline-${g.color || "indigo"}`;
     pill.textContent = `${g.name}: ${fmtMoney(perGroup[idx])}`;
-    groupRow.appendChild(pill);
+    row.appendChild(pill);
   });
-  container.appendChild(groupRow);
-  function tile(label, value, cls = "") {
-    const t = document.createElement("div");
-    t.className = "pricing-summary-tile " + cls;
-    t.innerHTML = `<span class="label"></span><span class="value"></span>`;
-    t.querySelector(".label").textContent = label;
-    t.querySelector(".value").textContent = value;
-    return t;
-  }
-  container.appendChild(tile("Total", fmtMoney(booked + tentativeTotal), "total"));
+  const total = document.createElement("span");
+  total.className = "pricing-summary-total";
+  total.textContent = `Total: ${fmtMoney(booked + tentativeTotal)}`;
+  row.appendChild(total);
+  container.appendChild(row);
 }
 
 // ID of the line item currently being edited (null = adding new).
@@ -1085,9 +1097,29 @@ function renderSplitEditor() {
       refreshSplitDisplay();
       save();
     });
+    // Inline color swatches — click to assign a color to this group.
+    const swatchRow = document.createElement("span");
+    swatchRow.className = "group-color-swatches";
+    const palette = ["indigo","rose","emerald","amber","teal","violet","sky","pink","lime","orange","cyan","grey"];
+    palette.forEach(c => {
+      const sw = document.createElement("button");
+      sw.type = "button";
+      sw.className = `color-swatch outline-${c}` + (g.color === c ? " selected" : "");
+      sw.style.background = `var(--${c})`;
+      sw.title = c;
+      sw.addEventListener("click", () => {
+        g.color = c;
+        save();
+        renderSplitEditor();
+        renderPricingLineItems();
+        renderPricingSummary();
+      });
+      swatchRow.appendChild(sw);
+    });
     row.appendChild(nameInput);
     row.appendChild(shareInput);
     row.appendChild(pct);
+    row.appendChild(swatchRow);
     if (state.priceSplit.groups.length > 1) {
       const x = document.createElement("button");
       x.type = "button";

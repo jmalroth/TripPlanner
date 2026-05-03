@@ -60,18 +60,18 @@
         <div id="overview" class="timeline overview"></div>
       </section>
 
-      <section class="panel" id="todo-panel" hidden>
-        <div class="panel-head">
+      <details class="panel todo-section" id="todo-panel" hidden open>
+        <summary class="panel-head">
           <h2>To do — still need to book</h2>
           <span class="hint">Tentative items from your itinerary</span>
-        </div>
+        </summary>
         <div class="todo-bundle-bar" id="todo-bundle-bar" hidden>
           <input id="todo-bundle-label" type="text" placeholder="Bundle name (e.g. 'Outbound flights')" />
           <button id="todo-bundle-add" type="button">Bundle selected</button>
           <button id="todo-bundle-clear" type="button" class="ghost">Clear</button>
         </div>
         <ul id="todo-list" class="todo-list"></ul>
-      </section>
+      </details>
 
       <section class="panel">
         <div class="panel-head">
@@ -97,7 +97,6 @@
       <details class="panel pricing-split-section" id="pricing-split-section">
         <summary class="panel-head">
           <h2>Default split</h2>
-          <span class="hint">How costs are divided across groups by default. You can override per item.</span>
         </summary>
         <div class="pricing-split-panel">
           <div id="pricing-split-rows" class="pricing-split-rows"></div>
