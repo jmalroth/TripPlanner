@@ -777,10 +777,10 @@ main {
 .todo-list .todo-swatch { width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0; background-image: repeating-linear-gradient(45deg, rgba(255,255,255,0.55) 0, rgba(255,255,255,0.55) 3px, transparent 3px, transparent 6px); }
 .todo-list .todo-title { font-weight: 600; }
 .todo-list .todo-meta { color: var(--muted); font-size: 12px; }
-.todo-section > summary { list-style: none; cursor: pointer; }
+.todo-section > summary { list-style: none; cursor: pointer; justify-content: flex-start; gap: 8px; }
 .todo-section > summary::-webkit-details-marker { display: none; }
-.todo-section > summary::before { content: "▾ "; color: var(--muted); display: inline-block; }
-.todo-section:not([open]) > summary::before { content: "▸ "; }
+.todo-section > summary::before { content: "▾"; color: var(--muted); display: inline-block; }
+.todo-section:not([open]) > summary::before { content: "▸"; }
 .todo-section, .todo-section .todo-list, .todo-section .todo-list li { text-align: left; }
 .todo-section .todo-list li { justify-content: flex-start !important; }
 .todo-section { text-align: left !important; }
@@ -818,10 +818,10 @@ main {
 .pricing-split-section { margin-bottom: 14px; text-align: left; }
 .pricing-split-section .pricing-split-rows,
 .pricing-split-section .split-actions { justify-content: flex-start; }
-.pricing-split-section > summary { list-style: none; cursor: pointer; }
+.pricing-split-section > summary { list-style: none; cursor: pointer; justify-content: flex-start; gap: 8px; }
 .pricing-split-section > summary::-webkit-details-marker { display: none; }
-.pricing-split-section > summary::before { content: "▸ "; color: var(--muted); display: inline-block; transition: transform 0.1s; }
-.pricing-split-section[open] > summary::before { content: "▾ "; }
+.pricing-split-section > summary::before { content: "▸"; color: var(--muted); display: inline-block; transition: transform 0.1s; }
+.pricing-split-section[open] > summary::before { content: "▾"; }
 .pricing-split-section > .pricing-split-panel { margin-top: 10px; }
 .pricing-split-panel { padding: 12px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; }
 .split-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px; }
