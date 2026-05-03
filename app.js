@@ -860,9 +860,7 @@ function renderPricingSummary() {
     t.querySelector(".value").textContent = value;
     return t;
   }
-  container.appendChild(tile("Booked", fmtMoney(booked)));
-  container.appendChild(tile("Tentative", fmtMoney(tentativeTotal)));
-  container.appendChild(tile("Grand total", fmtMoney(booked + tentativeTotal), "total"));
+  container.appendChild(tile("Total", fmtMoney(booked + tentativeTotal), "total"));
 }
 
 // ID of the line item currently being edited (null = adding new).

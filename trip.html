@@ -94,6 +94,19 @@
 
   <div class="tab-panel" id="tab-pricing" hidden>
     <main>
+      <details class="panel pricing-split-section" id="pricing-split-section">
+        <summary class="panel-head">
+          <h2>Default split</h2>
+          <span class="hint">How costs are divided across groups by default. You can override per item.</span>
+        </summary>
+        <div class="pricing-split-panel">
+          <div id="pricing-split-rows" class="pricing-split-rows"></div>
+          <div class="split-actions">
+            <button id="pricing-add-split-group" type="button" class="ghost">+ Add group</button>
+            <span id="pricing-split-warn" class="pricing-split-warn"></span>
+          </div>
+        </div>
+      </details>
       <section class="panel">
         <div class="panel-head">
           <h2>Pricing</h2>
@@ -105,17 +118,6 @@
             <span id="pricing-selection-summary" class="pricing-selection-summary"></span>
           </div>
           <div id="pricing-pills" class="pricing-pills"></div>
-          <div class="pricing-split-panel">
-            <div class="split-head">
-              <strong>Default split</strong>
-              <span class="hint">How costs are divided across groups by default. You can override per item.</span>
-            </div>
-            <div id="pricing-split-rows" class="pricing-split-rows"></div>
-            <div class="split-actions">
-              <button id="pricing-add-split-group" type="button" class="ghost">+ Add group</button>
-              <span id="pricing-split-warn" class="pricing-split-warn"></span>
-            </div>
-          </div>
           <div class="pricing-add-form">
             <input id="pricing-label" type="text" placeholder="Optional label (e.g. 'Round trip flights')" />
             <div class="pricing-add-row">
