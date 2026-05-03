@@ -1550,6 +1550,12 @@ function buildColorGrid(selected) {
     customSwatch.style.background = e.target.value;
     customSwatch.textContent = "";
   });
+  // Click anywhere on the rainbow swatch opens the native color picker.
+  // (Clicking the wrapping <label> would normally just select the radio.)
+  customLabel.addEventListener("click", (e) => {
+    e.preventDefault();
+    colorPicker.click();
+  });
   customSwatch.appendChild(colorPicker);
   customLabel.appendChild(customRadio);
   customLabel.appendChild(customSwatch);
