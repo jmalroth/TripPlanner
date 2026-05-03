@@ -301,6 +301,21 @@ function eventBounds(ev, dayTzMap, homeTz) {
   const tzE = ev.endTz   || dayTzMap[ev.end]   || homeTz;
   const [sy, sm, sd] = ev.start.split("-").map(Number);
   const [ey, em, ed] = ev.end.split("-").map(Number);
+  // Lodging without explicit times: pack against 3pm check-in / 11am
+  // check-out so consecutive hotels on the same changeover day don't get
+  // treated as overlapping and stacked on separate rows.
+  if (ev.lane === "lodging" && !ev.startTime && !ev.endTime) {
+    const sUtc = wallToUtc(sy, sm, sd, 15, 0, tzS);
+    let eUtc;
+    if (ev.start === ev.end) {
+      const next = toISO(addDays(parseDay(ev.end), 1));
+      const [ny, nm, nd] = next.split("-").map(Number);
+      eUtc = wallToUtc(ny, nm, nd, 11, 0, tzE);
+    } else {
+      eUtc = wallToUtc(ey, em, ed, 11, 0, tzE);
+    }
+    return { sUtc, eUtc };
+  }
   let sUtc, eUtc;
   if (ev.startTime) {
     const [h, mn] = ev.startTime.split(":").map(Number);
