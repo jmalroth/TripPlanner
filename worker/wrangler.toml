@@ -7,4 +7,4 @@ compatibility_date = "2026-01-01"
 # so the worker code can reference env.SNAPSHOTS.
 [[kv_namespaces]]
 binding = "SNAPSHOTS"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
+id = "02221935c56a4276bf8b73ca30eef4f6"
