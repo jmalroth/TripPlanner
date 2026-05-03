@@ -2790,10 +2790,9 @@ function parseGoogleFlightsCompact(text, defaultYear) {
       }
     }
 
-    const title = flightNums
-      ? `${flightNums} ${route[2]} → ${route[4]}`
-      : `${route[2]} → ${route[4]}`;
-    const notes = [airline, cabin, duration].filter(Boolean).join(" · ") || "Auto-detected from paste";
+    const title = `${route[2]} → ${route[4]}`;
+    const notes = [airline && flightNums ? `${airline} ${flightNums}` : airline, cabin, duration]
+      .filter(Boolean).join(" · ") || "Auto-detected from paste";
 
     events.push({
       id: uid(),
