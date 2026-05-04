@@ -8,7 +8,10 @@
 <link rel="stylesheet" href="styles.css" />
 <style>
   .trips-wrap { max-width: 880px; margin: 0 auto; padding: 24px 20px; }
-  .trips-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 18px; }
+  .trips-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 18px; gap: 12px; flex-wrap: wrap; }
+  .trips-head-actions { display: inline-flex; align-items: center; gap: 12px; }
+  .archive-btn { background: transparent; color: var(--muted); border: 1px solid var(--line); padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .archive-btn:hover { color: var(--accent); border-color: var(--accent); }
   .trips-head h1 { margin: 0; font-size: 22px; }
   .trips-section h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 22px 0 8px; }
   .trip-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
@@ -63,9 +66,12 @@
   <div class="trips-wrap">
     <div class="trips-head">
       <h1>Trips</h1>
-      <div class="view-toggle" id="view-toggle">
-        <button data-view="list" class="active">List</button>
-        <button data-view="calendar">Calendar</button>
+      <div class="trips-head-actions">
+        <button id="open-archive" class="archive-btn" type="button" title="A staging area for items not yet sorted into trips">Travel archive →</button>
+        <div class="view-toggle" id="view-toggle">
+          <button data-view="list" class="active">List</button>
+          <button data-view="calendar">Calendar</button>
+        </div>
       </div>
     </div>
 
@@ -209,12 +215,17 @@ function todayStr() {
   return d.toISOString().slice(0, 10);
 }
 
+const ARCHIVE_SLUG = "archive";
+function isArchive(t) {
+  return t.slug === ARCHIVE_SLUG;
+}
+
 function isPast(t) {
   return t.end && t.end < todayStr();
 }
 
 function render() {
-  const list = readRegistry();
+  const list = readRegistry().filter(t => !isArchive(t));
   const upcoming = list.filter(t => !isPast(t));
   const past = list.filter(t => isPast(t));
 
@@ -319,7 +330,7 @@ function readTripBlob(id) {
 }
 
 function renderCalendar() {
-  const trips = readRegistry().filter(t => t.start && t.end);
+  const trips = readRegistry().filter(t => t.start && t.end && !isArchive(t));
   const container = document.getElementById("calendar-months");
   container.innerHTML = "";
 
@@ -577,6 +588,34 @@ document.getElementById("new-trip-form").addEventListener("submit", (e) => {
     shrunkDays: [],
   }));
   window.location.href = tripUrl(trip);
+});
+
+document.getElementById("open-archive").addEventListener("click", () => {
+  // Open the archive trip — provision a local registry entry on first click
+  // so trip.html has something to bind to before the worker pull.
+  const list = readRegistry();
+  if (!list.find(t => t.slug === ARCHIVE_SLUG)) {
+    const id = newTripId();
+    list.push({
+      id,
+      slug: ARCHIVE_SLUG,
+      name: "Travel archive",
+      start: null,
+      end: null,
+    });
+    writeRegistry(list);
+    localStorage.setItem(TRIP_KEY_PREFIX + id, JSON.stringify({
+      name: "Travel archive",
+      start: null,
+      end: null,
+      tzAware: false,
+      events: [],
+      options: [],
+      activeView: "main",
+      shrunkDays: [],
+    }));
+  }
+  window.location.href = `trip.html?id=${ARCHIVE_SLUG}`;
 });
 
 ensureAllSlugs();
