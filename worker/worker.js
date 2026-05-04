@@ -129,8 +129,9 @@ export default {
       if (text.length > 100_000) return json({ error: "text too long" }, { status: 413 });
       const tripStart = body.tripStart || null;
       const tripEnd = body.tripEnd || null;
+      const existingEvents = Array.isArray(body.existingEvents) ? body.existingEvents : null;
       try {
-        const result = await smartParse(text, tripStart, tripEnd, (env.ANTHROPIC_API_KEY || "").trim());
+        const result = await smartParse(text, tripStart, tripEnd, (env.ANTHROPIC_API_KEY || "").trim(), existingEvents);
         return json(result);
       } catch (e) {
         return json({ error: `parse failed: ${e.message}` }, { status: 502 });
@@ -144,8 +145,10 @@ export default {
 // Ask Claude to extract structured travel events from a pasted email/web body.
 // Returns { events: [...], totalPrice?: number }. Uses Haiku for cost (~$0.002
 // per parse) and prompt-cached system prompt to keep tokens cheap.
-async function smartParse(text, tripStart, tripEnd, apiKey) {
-  const SCHEMA_HINT = `
+async function smartParse(text, tripStart, tripEnd, apiKey, existingEvents) {
+  const updateMode = Array.isArray(existingEvents) && existingEvents.length > 0;
+
+  const SCHEMA_HINT_CREATE = `
 Return ONLY a JSON object matching this shape:
 {
   "events": [
@@ -178,9 +181,55 @@ Rules:
 - Skip emails that aren't about travel reservations — return events: [].
 - Output ONLY the JSON object, no commentary, no markdown fencing.`;
 
+  const SCHEMA_HINT_UPDATE = `
+You are merging new email content into a trip that already has events. Match
+each fact in the email against the existing event most likely to be the same
+real-world thing (same route + similar date for flights, same hotel name + date
+for lodging, etc.) and emit either an update or a new event.
+
+Return ONLY a JSON object matching this shape:
+{
+  "updates": [
+    {
+      "id": "string (the existing event id you are updating)",
+      "fields": {
+        "start": "YYYY-MM-DD (optional — only include fields that changed)",
+        "end":   "YYYY-MM-DD (optional)",
+        "startTime": "HH:MM (optional, 24-hour)",
+        "endTime":   "HH:MM (optional)",
+        "title": "string (optional — only if a clearly better title is available)",
+        "notes": "string (optional — append or replace, your judgment)"
+      }
+    }
+  ],
+  "newEvents": [
+    { same shape as the create-mode event objects — used only for legs/items
+      that genuinely don't match any existing event }
+  ],
+  "totalPrice": number (optional — only if the new email contains a total)
+}
+
+Rules:
+- Prefer updates over duplicates. If the email is about the same flights you
+  already have, ALL output should be in "updates" with empty "newEvents".
+- Only include fields in updates.fields that have new/better data — don't echo
+  unchanged values.
+- Same flight-leg / connection / hotel rules as create mode.
+- Output ONLY the JSON object, no commentary, no markdown fencing.`;
+
   const ctx = (tripStart && tripEnd)
     ? `Trip date range: ${tripStart} to ${tripEnd}.`
     : `Trip dates not yet set — use any explicit year in the text, otherwise current year.`;
+
+  const existingCtx = updateMode
+    ? `\n\nExisting events on this trip (id, title, lane, start, end, startTime, endTime):\n${
+        existingEvents.map(e => JSON.stringify({
+          id: e.id, title: e.title, lane: e.lane,
+          start: e.start, end: e.end,
+          startTime: e.startTime || null, endTime: e.endTime || null,
+        })).join("\n")
+      }`
+    : "";
 
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -195,12 +244,12 @@ Rules:
       system: [
         {
           type: "text",
-          text: "You extract structured travel-event data from confirmation emails and itineraries. " + SCHEMA_HINT,
+          text: "You extract structured travel-event data from confirmation emails and itineraries. " + (updateMode ? SCHEMA_HINT_UPDATE : SCHEMA_HINT_CREATE),
           cache_control: { type: "ephemeral" },
         },
       ],
       messages: [
-        { role: "user", content: `${ctx}\n\nEmail/itinerary text:\n${text}` },
+        { role: "user", content: `${ctx}${existingCtx}\n\nEmail/itinerary text:\n${text}` },
       ],
     }),
   });
@@ -216,6 +265,11 @@ Rules:
   let parsed;
   try { parsed = JSON.parse(clean); }
   catch { throw new Error(`model returned non-JSON: ${clean.slice(0, 200)}`); }
-  if (!Array.isArray(parsed.events)) parsed.events = [];
+  if (updateMode) {
+    if (!Array.isArray(parsed.updates)) parsed.updates = [];
+    if (!Array.isArray(parsed.newEvents)) parsed.newEvents = [];
+  } else {
+    if (!Array.isArray(parsed.events)) parsed.events = [];
+  }
   return parsed;
 }

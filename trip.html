@@ -90,7 +90,8 @@
             <textarea id="paste-input-main" rows="6" placeholder="Paste a flight (Google Flights / Kayak / etc.) — or type a command:&#10;  add hotel on jul 7 for znz hotel&#10;  add activity on july 4 hiking&#10;  add lodging on jul 7 to jul 8 at riu palace"></textarea>
             <div class="paste-actions">
               <button id="paste-parse-main" type="button">Parse &amp; add</button>
-              <button id="paste-smart-main" type="button" class="smart" title="Use AI to parse this text">✨ Smart parse</button>
+              <button id="paste-smart-main" type="button" class="smart" title="Use AI to add new events from this text">✨ Smart parse</button>
+              <button id="paste-update-main" type="button" class="smart" title="Use AI to patch existing events with new details from this text">✨ Smart update</button>
               <button id="paste-clear-main" type="button" class="ghost">Clear</button>
             </div>
             <div id="paste-status-main" class="paste-status"></div>
@@ -173,7 +174,7 @@
                 <select id="paste-target"></select>
               </label>
               <button id="paste-parse" type="button">Parse &amp; add</button>
-              <button id="paste-smart" type="button" class="smart" title="Use AI to parse this text">✨ Smart parse</button>
+              <button id="paste-smart" type="button" class="smart" title="Use AI to add new events from this text">✨ Smart parse</button>
               <button id="paste-clear" type="button" class="ghost">Clear</button>
             </div>
             <div id="paste-status" class="paste-status"></div>

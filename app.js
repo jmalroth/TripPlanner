@@ -3412,20 +3412,22 @@ document.getElementById("add-option-btn")?.addEventListener("click", () => {
   renderApp();
 });
 
-async function smartParseRemote(text, statusEl, targetIsMain) {
+async function smartParseRemote(text, statusEl, existingEvents) {
   const pw = getOwnerPassword();
   if (!pw) {
     statusEl.textContent = "Set the owner password first (edit something to get prompted).";
     statusEl.className = "paste-status error";
     return null;
   }
-  statusEl.textContent = "Parsing with Claude…";
+  statusEl.textContent = existingEvents ? "Asking Claude to patch existing events…" : "Parsing with Claude…";
   statusEl.className = "paste-status";
   try {
+    const body = { text, tripStart: state.start || null, tripEnd: state.end || null };
+    if (existingEvents) body.existingEvents = existingEvents;
     const res = await fetch(`${SNAPSHOT_API}/smart-parse`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${pw}` },
-      body: JSON.stringify({ text, tripStart: state.start || null, tripEnd: state.end || null }),
+      body: JSON.stringify(body),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || `worker ${res.status}`);
@@ -3437,10 +3439,11 @@ async function smartParseRemote(text, statusEl, targetIsMain) {
   }
 }
 
-function wirePasteBlock({ inputId, parseId, clearId, statusId, targetId, smartId }) {
+function wirePasteBlock({ inputId, parseId, clearId, statusId, targetId, smartId, updateId }) {
   const parseBtn = document.getElementById(parseId);
   if (!parseBtn) return;
   const smartBtn = smartId ? document.getElementById(smartId) : null;
+  const updateBtn = updateId ? document.getElementById(updateId) : null;
 
   const insertEvents = (events, totalPrice, target, status, input) => {
     if (target === "__main__") {
@@ -3513,6 +3516,68 @@ function wirePasteBlock({ inputId, parseId, clearId, statusId, targetId, smartId
         if (target === "__new__") { const newOpt = createOption(); target = newOpt.id; }
       }
       insertEvents(events, data.totalPrice, target, status, input);
+    });
+  }
+
+  if (updateBtn) {
+    updateBtn.addEventListener("click", async () => {
+      const input = document.getElementById(inputId);
+      const status = document.getElementById(statusId);
+      const text = input.value;
+      if (!text.trim()) {
+        status.textContent = "Paste some text first.";
+        status.className = "paste-status error";
+        return;
+      }
+      if (!Array.isArray(state.events) || state.events.length === 0) {
+        status.textContent = "Nothing to update — use Smart parse to add events first.";
+        status.className = "paste-status error";
+        return;
+      }
+      // Send a slim version of existing events (no notes / colors) — Claude only
+      // needs the identifying fields to match against.
+      const existingSlim = state.events.map(e => ({
+        id: e.id, title: e.title, lane: e.lane,
+        start: e.start, end: e.end,
+        startTime: e.startTime, endTime: e.endTime,
+      }));
+      updateBtn.disabled = true;
+      const data = await smartParseRemote(text, status, existingSlim);
+      updateBtn.disabled = false;
+      if (!data) return;
+      const updates = data.updates || [];
+      const newEvents = data.newEvents || [];
+      let updatedCount = 0;
+      for (const u of updates) {
+        const ev = state.events.find(e => e.id === u.id);
+        if (!ev || !u.fields) continue;
+        Object.assign(ev, u.fields);
+        updatedCount++;
+      }
+      const addedEvents = newEvents.map(e => ({
+        id: uid(),
+        title: e.title || "Event",
+        lane: ["flights","lodging","activities","rental","location"].includes(e.lane) ? e.lane : "activities",
+        color: e.lane === "flights" ? "indigo" : e.lane === "lodging" ? "amber" : e.lane === "rental" ? "orange" : e.lane === "location" ? "violet" : "emerald",
+        start: e.start, end: e.end || e.start,
+        ...(e.startTime ? { startTime: e.startTime } : {}),
+        ...(e.endTime ? { endTime: e.endTime } : {}),
+        notes: e.notes || "Parsed by Claude",
+      })).filter(e => e.start && /^\d{4}-\d{2}-\d{2}$/.test(e.start));
+      if (addedEvents.length > 0) state.events.push(...addedEvents);
+      if (updatedCount === 0 && addedEvents.length === 0) {
+        status.textContent = "Claude didn't find anything to change.";
+        status.className = "paste-status error";
+        return;
+      }
+      save();
+      const parts = [];
+      if (updatedCount > 0) parts.push(`Updated ${updatedCount} event(s)`);
+      if (addedEvents.length > 0) parts.push(`added ${addedEvents.length} new`);
+      status.textContent = parts.join(", ") + ".";
+      status.className = "paste-status success";
+      input.value = "";
+      renderApp();
     });
   }
 
@@ -3631,6 +3696,7 @@ wirePasteBlock({
   inputId: "paste-input-main",
   parseId: "paste-parse-main",
   smartId: "paste-smart-main",
+  updateId: "paste-update-main",
   clearId: "paste-clear-main",
   statusId: "paste-status-main",
   targetId: null,
