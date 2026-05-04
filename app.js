@@ -1988,6 +1988,144 @@ document.getElementById("tz-aware").addEventListener("change", (e) => {
 document.getElementById("add-event-btn").addEventListener("click", () => openEventDialog(null));
 document.getElementById("share-btn")?.addEventListener("click", shareTrip);
 
+// --- Hotel comparison tab ---
+
+function ensureHotelCompare() {
+  if (!Array.isArray(state.hotelCompare)) state.hotelCompare = [];
+}
+
+function renderHotelCompare() {
+  ensureHotelCompare();
+  const wrap = document.getElementById("compare-table");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  if (state.hotelCompare.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "compare-empty";
+    empty.textContent = "No hotels yet — paste one above to start comparing.";
+    wrap.appendChild(empty);
+    return;
+  }
+
+  const fmtPrice = (n, ccy) => {
+    if (n == null) return "—";
+    const sym = ccy === "USD" ? "$" : ccy ? `${ccy} ` : "$";
+    return `${sym}${Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+  };
+
+  const ROWS = [
+    ["Platform",     h => h.platform || "—"],
+    ["Check in",     h => h.checkIn  || "—"],
+    ["Check out",    h => h.checkOut || "—"],
+    ["Nights",       h => h.nights != null ? h.nights : "—"],
+    ["Per night",    h => fmtPrice(h.pricePerNight, h.currency)],
+    ["Total",        h => fmtPrice(h.totalPrice, h.currency)],
+    ["Neighborhood", h => h.neighborhood || "—"],
+    ["Rating",       h => h.rating || "—"],
+    ["Cancellation", h => h.cancellation || "—"],
+    ["Amenities",    h => Array.isArray(h.amenities) && h.amenities.length ? h.amenities.join(", ") : "—"],
+    ["Notes",        h => h.notes || "—"],
+    ["Link",         h => h.url ? `<a href="${h.url}" target="_blank" rel="noopener">open</a>` : "—"],
+  ];
+
+  // Header row with hotel names + delete buttons.
+  const tbl = document.createElement("table");
+  tbl.className = "compare-table";
+  const head = document.createElement("tr");
+  head.appendChild(document.createElement("th"));
+  for (const h of state.hotelCompare) {
+    const th = document.createElement("th");
+    const name = document.createElement("div");
+    name.className = "compare-name";
+    name.textContent = h.name || "Untitled";
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "compare-del";
+    del.textContent = "×";
+    del.title = "Remove";
+    del.addEventListener("click", () => {
+      state.hotelCompare = state.hotelCompare.filter(x => x.id !== h.id);
+      save();
+      renderHotelCompare();
+    });
+    th.appendChild(name);
+    th.appendChild(del);
+    head.appendChild(th);
+  }
+  tbl.appendChild(head);
+  for (const [label, getter] of ROWS) {
+    const tr = document.createElement("tr");
+    const lblTh = document.createElement("th");
+    lblTh.className = "compare-label";
+    lblTh.textContent = label;
+    tr.appendChild(lblTh);
+    for (const h of state.hotelCompare) {
+      const td = document.createElement("td");
+      const v = getter(h);
+      if (label === "Link" && h.url) td.innerHTML = v;
+      else td.textContent = v;
+      tr.appendChild(td);
+    }
+    tbl.appendChild(tr);
+  }
+  wrap.appendChild(tbl);
+}
+
+async function smartParseHotelRemote(text, statusEl) {
+  const pw = getOwnerPassword();
+  if (!pw) {
+    statusEl.textContent = "Set the owner password first (edit something to get prompted).";
+    statusEl.className = "paste-status error";
+    return null;
+  }
+  statusEl.textContent = "Parsing hotel with Claude…";
+  statusEl.className = "paste-status";
+  try {
+    const res = await fetch(`${SNAPSHOT_API}/smart-parse`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${pw}` },
+      body: JSON.stringify({ text, mode: "hotel-compare", tripStart: state.start || null, tripEnd: state.end || null }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `worker ${res.status}`);
+    return data;
+  } catch (e) {
+    statusEl.textContent = `Smart parse failed: ${e.message}`;
+    statusEl.className = "paste-status error";
+    return null;
+  }
+}
+
+document.getElementById("compare-smart")?.addEventListener("click", async () => {
+  const input = document.getElementById("compare-paste-input");
+  const status = document.getElementById("compare-paste-status");
+  const text = input.value;
+  if (!text.trim()) {
+    status.textContent = "Paste a hotel listing first.";
+    status.className = "paste-status error";
+    return;
+  }
+  const btn = document.getElementById("compare-smart");
+  btn.disabled = true;
+  const data = await smartParseHotelRemote(text, status);
+  btn.disabled = false;
+  if (!data) return;
+  ensureHotelCompare();
+  state.hotelCompare.push({ id: uid(), ...data });
+  save();
+  status.textContent = `Added ${data.name || "hotel"} to comparison.`;
+  status.className = "paste-status success";
+  input.value = "";
+  renderHotelCompare();
+});
+
+document.getElementById("compare-paste-clear")?.addEventListener("click", () => {
+  const input = document.getElementById("compare-paste-input");
+  const status = document.getElementById("compare-paste-status");
+  if (input) input.value = "";
+  if (status) { status.textContent = ""; status.className = "paste-status"; }
+});
+
 // --- flight paste/parser ---
 
 const AIRPORT_TZ = {
@@ -3322,11 +3460,13 @@ function renderApp() {
   document.getElementById("tab-main").hidden = state.activeView !== "main";
   document.getElementById("tab-pricing").hidden = !pricingAllowed || state.activeView !== "pricing";
   document.getElementById("tab-options").hidden = state.activeView !== "options";
+  document.getElementById("tab-compare").hidden = state.activeView !== "compare";
 
   updateSyncIndicator();
 
   if (state.activeView === "main") render();
   else if (state.activeView === "pricing") renderPricing();
+  else if (state.activeView === "compare") renderHotelCompare();
   else renderOptions();
 
   window.scrollTo({ top: scrollY, behavior: "instant" });

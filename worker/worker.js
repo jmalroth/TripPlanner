@@ -130,8 +130,14 @@ export default {
       const tripStart = body.tripStart || null;
       const tripEnd = body.tripEnd || null;
       const existingEvents = Array.isArray(body.existingEvents) ? body.existingEvents : null;
+      const mode = body.mode || null;
       try {
-        const result = await smartParse(text, tripStart, tripEnd, (env.ANTHROPIC_API_KEY || "").trim(), existingEvents);
+        const apiKey = (env.ANTHROPIC_API_KEY || "").trim();
+        if (mode === "hotel-compare") {
+          const result = await parseHotelForCompare(text, tripStart, tripEnd, apiKey);
+          return json(result);
+        }
+        const result = await smartParse(text, tripStart, tripEnd, apiKey, existingEvents);
         return json(result);
       } catch (e) {
         return json({ error: `parse failed: ${e.message}` }, { status: 502 });
@@ -141,6 +147,68 @@ export default {
     return json({ error: "not found" }, { status: 404 });
   },
 };
+
+// Extract a single hotel from a listing/email for the comparison table.
+async function parseHotelForCompare(text, tripStart, tripEnd, apiKey) {
+  const SCHEMA = `
+Return ONLY a JSON object matching this shape — fields you can't determine
+should be null (don't make up values):
+
+{
+  "name": "string (e.g. 'Courtyard Mexico City Airport' or 'Bela Vista Airbnb')",
+  "platform": "Marriott | Hilton | Hyatt | Booking.com | Hotels.com | Airbnb | Vrbo | Expedia | Other | null",
+  "checkIn":  "YYYY-MM-DD or null",
+  "checkOut": "YYYY-MM-DD or null",
+  "nights":   "integer or null",
+  "neighborhood": "string or null (e.g. 'Bela Vista, Sao Paulo')",
+  "rating":   "string or null (e.g. '4.96', '4.5/5', '4 stars')",
+  "pricePerNight": "number or null (USD-equivalent if currency is shown)",
+  "totalPrice":   "number or null",
+  "currency":     "string or null (USD, BRL, EUR, etc.)",
+  "amenities":    "array of short strings (e.g. ['Free WiFi','Breakfast','Pool'])",
+  "cancellation": "string or null (short summary)",
+  "url":          "string or null (if visible in paste)",
+  "notes":        "string or null (anything else worth comparing — view, room type, host, etc.)"
+}
+
+Output ONLY the JSON object, no commentary, no markdown fencing.`;
+
+  const ctx = (tripStart && tripEnd)
+    ? `Trip date range: ${tripStart} to ${tripEnd}. Use it to disambiguate years.`
+    : `Trip dates not yet set — use any explicit year, otherwise current year.`;
+
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 1000,
+      system: [{
+        type: "text",
+        text: "You extract structured hotel/lodging details from listings, emails, and web copy for a side-by-side comparison table. " + SCHEMA,
+        cache_control: { type: "ephemeral" },
+      }],
+      messages: [
+        { role: "user", content: `${ctx}\n\nHotel listing text:\n${text}` },
+      ],
+    }),
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    throw new Error(`anthropic ${res.status}: ${errText.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  const content = data.content?.[0]?.text || "";
+  const clean = content.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
+  let parsed;
+  try { parsed = JSON.parse(clean); }
+  catch { throw new Error(`model returned non-JSON: ${clean.slice(0, 200)}`); }
+  return parsed;
+}
 
 // Ask Claude to extract structured travel events from a pasted email/web body.
 // Returns { events: [...], totalPrice?: number }. Uses Haiku for cost (~$0.002

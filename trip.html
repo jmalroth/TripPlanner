@@ -33,6 +33,7 @@
     <button class="tab-btn" data-tab="main">My itinerary</button>
     <button class="tab-btn" data-tab="pricing">Pricing</button>
     <button class="tab-btn" data-tab="options">Options</button>
+    <button class="tab-btn" data-tab="compare">Compare hotels</button>
   </nav>
 
   <div class="tab-panel" id="tab-main">
@@ -198,6 +199,29 @@
         </details>
         <div id="options-list"></div>
         <div id="options-comparison"></div>
+      </section>
+    </main>
+  </div>
+
+  <div class="tab-panel" id="tab-compare" hidden>
+    <main>
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Compare hotels</h2>
+          <span class="hint">Paste hotel listings to compare side-by-side</span>
+        </div>
+        <details class="paste-block" open>
+          <summary>Paste a hotel listing</summary>
+          <div class="paste-content">
+            <textarea id="compare-paste-input" rows="6" placeholder="Paste a Booking.com / Hotels.com / Marriott / Airbnb listing — name, price, location, rating, amenities."></textarea>
+            <div class="paste-actions">
+              <button id="compare-smart" type="button" class="smart" title="Extract this hotel and add it to the comparison">✨ Smart parse hotel</button>
+              <button id="compare-paste-clear" type="button" class="ghost">Clear</button>
+            </div>
+            <div id="compare-paste-status" class="paste-status"></div>
+          </div>
+        </details>
+        <div id="compare-table" class="compare-table-wrap"></div>
       </section>
     </main>
   </div>
