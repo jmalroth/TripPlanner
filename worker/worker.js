@@ -170,6 +170,14 @@ Rules:
   seat assignments like "SEA - MEX: 3E / MEX - GRU: 3D", or two flight
   numbers ("AM495, AM14"), or "1 stop · 20h · ..." — produce TWO events
   (SEA→MEX and MEX→GRU), not one combined SEA→GRU. Same for return.
+- BETWEEN connection segments, add a layover event:
+    title: "<CODE> layover" (e.g. "MEX layover"),
+    lane: "flights",
+    start = arrival date of the previous leg, startTime = its arrival time,
+    end   = departure date of the next leg, endTime   = its departure time,
+    notes: "<duration> layover" if duration is shown.
+  Skip the layover if either bracketing leg has no time info — a date-only
+  layover bar isn't useful.
 - For connection segments where intermediate timing isn't in the email,
   use the same date as the outer leg and leave startTime/endTime off; user
   can adjust later.
@@ -210,8 +218,16 @@ Return ONLY a JSON object matching this shape:
 }
 
 Rules:
-- Prefer updates over duplicates. If the email is about the same flights you
-  already have, ALL output should be in "updates" with empty "newEvents".
+- STRONGLY prefer updates over duplicates. Match by route (same airport pair,
+  ignoring direction order) within the same trip date range. If an existing
+  flight has the same departure-airport → arrival-airport as something in the
+  email and falls within ~3 days of it, treat them as the same flight and
+  emit an update — even if start dates appear to differ (the new email may
+  have a more accurate date you should overwrite).
+- For connection layover events ("MEX layover" etc.) that don't yet exist in
+  the existing list, add them in newEvents. Layover events have:
+    title: "<CODE> layover", lane: "flights",
+    start/startTime = previous leg's arrival, end/endTime = next leg's departure.
 - Only include fields in updates.fields that have new/better data — don't echo
   unchanged values.
 - Same flight-leg / connection / hotel rules as create mode.
