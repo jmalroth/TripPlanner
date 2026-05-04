@@ -1992,6 +1992,32 @@ document.getElementById("share-btn")?.addEventListener("click", shareTrip);
 
 function ensureHotelCompare() {
   if (!Array.isArray(state.hotelCompare)) state.hotelCompare = [];
+  // Backfill ratings/comments arrays on hotels added before this feature.
+  for (const h of state.hotelCompare) {
+    if (!Array.isArray(h.ratings)) h.ratings = [];
+    if (!Array.isArray(h.comments)) h.comments = [];
+  }
+}
+
+const DISPLAY_NAME_KEY = "trip-builder-display-name";
+function getDisplayName() {
+  let n = localStorage.getItem(DISPLAY_NAME_KEY);
+  if (n && n.trim()) return n.trim();
+  const entered = prompt("Your name (for comments + ratings on this device):");
+  if (!entered || !entered.trim()) return null;
+  n = entered.trim();
+  localStorage.setItem(DISPLAY_NAME_KEY, n);
+  return n;
+}
+function fmtStars(r) {
+  if (r == null) return "—";
+  const n = Math.round(Number(r));
+  return "★".repeat(n) + "☆".repeat(Math.max(0, 5 - n));
+}
+function avgRating(ratings) {
+  if (!ratings || ratings.length === 0) return null;
+  const sum = ratings.reduce((s, r) => s + Number(r.rating || 0), 0);
+  return sum / ratings.length;
 }
 
 function renderHotelCompare() {
@@ -2021,7 +2047,7 @@ function renderHotelCompare() {
     ["Per night",    h => fmtPrice(h.pricePerNight, h.currency)],
     ["Total",        h => fmtPrice(h.totalPrice, h.currency)],
     ["Neighborhood", h => h.neighborhood || "—"],
-    ["Rating",       h => h.rating || "—"],
+    ["Listed rating",h => h.rating || "—"],
     ["Cancellation", h => h.cancellation || "—"],
     ["Amenities",    h => Array.isArray(h.amenities) && h.amenities.length ? h.amenities.join(", ") : "—"],
     ["Notes",        h => h.notes || "—"],
@@ -2068,6 +2094,116 @@ function renderHotelCompare() {
     }
     tbl.appendChild(tr);
   }
+
+  // Group ratings row.
+  const ratingsTr = document.createElement("tr");
+  const ratingsLabel = document.createElement("th");
+  ratingsLabel.className = "compare-label";
+  ratingsLabel.textContent = "Group ratings";
+  ratingsTr.appendChild(ratingsLabel);
+  for (const h of state.hotelCompare) {
+    const td = document.createElement("td");
+    td.className = "compare-ratings";
+    const avg = avgRating(h.ratings);
+    if (avg != null) {
+      const summary = document.createElement("div");
+      summary.className = "compare-rating-summary";
+      summary.textContent = `${fmtStars(avg)}  (${avg.toFixed(1)})`;
+      td.appendChild(summary);
+    }
+    for (const r of h.ratings) {
+      const row = document.createElement("div");
+      row.className = "compare-rating-row";
+      const author = document.createElement("span");
+      author.className = "compare-author";
+      author.textContent = r.author;
+      const stars = document.createElement("span");
+      stars.textContent = ` ${fmtStars(r.rating)}`;
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "compare-mini-del";
+      del.textContent = "×";
+      del.title = "Remove";
+      del.addEventListener("click", () => {
+        h.ratings = h.ratings.filter(x => x.id !== r.id);
+        save();
+        renderHotelCompare();
+      });
+      row.appendChild(author);
+      row.appendChild(stars);
+      row.appendChild(del);
+      td.appendChild(row);
+    }
+    const addBtn = document.createElement("button");
+    addBtn.type = "button";
+    addBtn.className = "compare-mini-add";
+    addBtn.textContent = "+ Add rating";
+    addBtn.addEventListener("click", () => {
+      const author = getDisplayName();
+      if (!author) return;
+      const raw = prompt(`Rating from ${author} (1–5):`, "4");
+      if (raw == null) return;
+      const n = parseInt(raw, 10);
+      if (!isFinite(n) || n < 1 || n > 5) { alert("Enter a number 1–5."); return; }
+      h.ratings.push({ id: uid(), author, rating: n, when: Date.now() });
+      save();
+      renderHotelCompare();
+    });
+    td.appendChild(addBtn);
+    ratingsTr.appendChild(td);
+  }
+  tbl.appendChild(ratingsTr);
+
+  // Comments row.
+  const commentsTr = document.createElement("tr");
+  const commentsLabel = document.createElement("th");
+  commentsLabel.className = "compare-label";
+  commentsLabel.textContent = "Comments";
+  commentsTr.appendChild(commentsLabel);
+  for (const h of state.hotelCompare) {
+    const td = document.createElement("td");
+    td.className = "compare-comments";
+    for (const c of h.comments) {
+      const row = document.createElement("div");
+      row.className = "compare-comment-row";
+      const author = document.createElement("span");
+      author.className = "compare-author";
+      author.textContent = c.author + ":";
+      const text = document.createElement("span");
+      text.textContent = " " + c.text;
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "compare-mini-del";
+      del.textContent = "×";
+      del.title = "Remove";
+      del.addEventListener("click", () => {
+        h.comments = h.comments.filter(x => x.id !== c.id);
+        save();
+        renderHotelCompare();
+      });
+      row.appendChild(author);
+      row.appendChild(text);
+      row.appendChild(del);
+      td.appendChild(row);
+    }
+    const addBtn = document.createElement("button");
+    addBtn.type = "button";
+    addBtn.className = "compare-mini-add";
+    addBtn.textContent = "+ Add comment";
+    addBtn.addEventListener("click", () => {
+      const author = getDisplayName();
+      if (!author) return;
+      const text = prompt(`Comment from ${author}:`);
+      if (!text || !text.trim()) return;
+      h.comments.push({ id: uid(), author, text: text.trim(), when: Date.now() });
+      save();
+      renderHotelCompare();
+    });
+    td.appendChild(addBtn);
+    commentsTr.appendChild(td);
+  }
+  tbl.appendChild(commentsTr);
+
   wrap.appendChild(tbl);
 }
 
