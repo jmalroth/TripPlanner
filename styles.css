@@ -1266,3 +1266,78 @@ dialog h3 {
 }
 
 .dialog-actions .spacer { flex: 1; }
+
+/* --- Mobile (iPhone Safari and other narrow viewports) ----------------- */
+@media (max-width: 720px) {
+  /* Topbar: stack name + actions, allow wrapping. */
+  .topbar { padding: 10px 12px; gap: 8px; }
+  .trip-meta { gap: 8px; min-width: 0; flex: 1 1 100%; }
+  .trip-display { padding: 4px 6px; }
+  .trip-display #trip-display-name { font-size: 16px; }
+  .trip-display .trip-display-dates { font-size: 12px; }
+  .trip-edit-row { width: 100%; }
+  .trip-edit-row input[type="date"] { min-width: 0; flex: 1; }
+  .actions { flex: 1 1 100%; justify-content: flex-end; gap: 8px; }
+  .actions button { padding: 8px 12px; min-height: 36px; }
+  /* Hide a sticky topbar can squish the page on small screens */
+  .topbar { position: static; }
+
+  /* Tabs row: horizontal scroll instead of being cut off. */
+  .tabs {
+    padding: 0 8px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    flex-wrap: nowrap;
+    -webkit-overflow-scrolling: touch;
+    position: static;
+    scrollbar-width: none;
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab-btn {
+    flex: 0 0 auto;
+    padding: 12px 12px;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  /* Main content: tighter padding so timeline + cards fit. */
+  main { padding: 12px; gap: 14px; }
+  .panel-head { flex-wrap: wrap; gap: 6px; }
+  .panel-head-actions { width: 100%; justify-content: flex-end; }
+
+  /* Buttons: bigger tap targets. */
+  button { min-height: 36px; }
+  input, select, textarea { min-height: 36px; font-size: 16px; }
+  /* font-size 16px keeps iOS Safari from auto-zooming on focus. */
+
+  /* Paste blocks: full-width textarea, wrapped action row. */
+  .paste-actions { gap: 8px; }
+  .paste-actions button { flex: 1 1 auto; }
+
+  /* Pricing: pills wrap, summary stacks. */
+  .pricing-pills { gap: 6px; }
+  .pricing-add-row { flex-wrap: wrap; }
+
+  /* Compare-hotels table stays scrollable as is, but tighten cells. */
+  .compare-table th, .compare-table td { min-width: 130px; padding: 6px 8px; font-size: 12px; }
+  .compare-name { font-size: 14px; }
+
+  /* Calendar grid (trips list): smaller day cells. */
+  .cal-day { min-height: 48px; font-size: 11px; }
+  .cal-trip { font-size: 10px; padding: 1px 4px; }
+
+  /* Trips list head wraps. */
+  .trips-head { flex-wrap: wrap; gap: 8px; }
+  .new-trip-form { flex-direction: column; align-items: stretch; }
+  .new-trip-form label { width: 100%; }
+  .new-trip-form input { width: 100%; }
+  .new-trip-form button { padding: 10px 14px; }
+
+  /* Share/export dropdown: full width on phone. */
+  .export-links { position: fixed; left: 8px; right: 8px; top: 60px; width: auto; max-width: none; }
+
+  /* Dialogs: full-width form rows. */
+  dialog { max-width: 96vw; }
+  .row-2 { flex-direction: column; gap: 8px; }
+  .row-2 > * { width: 100%; }
+}
