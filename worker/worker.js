@@ -184,6 +184,8 @@ Rules:
 - Don't combine round-trips into one event — outbound and return are
   always separate events (and each may itself have multiple legs).
 - Hotels: one event spanning check-in date to check-out date. Lane = "lodging".
+- Airbnb / Vrbo / short-term-rental pastes: title as "<neighborhood-or-city> Airbnb"
+  (e.g. "Bela Vista Airbnb"). If only a host name is available, use "<host>'s Airbnb".
 - Use the trip context dates to disambiguate years for ambiguous dates (e.g. "Aug 13" without a year).
 - For flight titles use IATA codes: "SEA → GRU", not "Seattle to Sao Paulo".
 - Skip emails that aren't about travel reservations — return events: [].
