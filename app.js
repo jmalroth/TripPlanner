@@ -1789,12 +1789,25 @@ function render() {
   const laneLabelW = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--lane-label-w")) || 110;
   const dayPx = Math.max(60, Math.floor((breakdownWidth - laneLabelW - 4) / segSize));
 
+  // The archive trip can span years and have huge gaps — skip segments
+  // with zero events so the breakdown stays useful instead of scrolling
+  // through pages of empty rows.
+  const isArchive = tripSlug() === "archive";
+  const hasEventsInRange = (a, b) => state.events.some(ev =>
+    ev.start && ev.end && ev.start <= b && ev.end >= a);
+
   let cursor = parseDay(state.start);
   let idx = 1;
   while (toISO(cursor) <= state.end) {
     const segStart = toISO(cursor);
     const segEndDate = addDays(cursor, segSize - 1);
     const segEnd = toISO(segEndDate) > state.end ? state.end : toISO(segEndDate);
+
+    if (isArchive && !hasEventsInRange(segStart, segEnd)) {
+      cursor = addDays(cursor, segSize);
+      idx++;
+      continue;
+    }
 
     const seg = el("div", "segment");
     const head = el("div", "segment-head");
