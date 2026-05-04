@@ -163,7 +163,15 @@ Return ONLY a JSON object matching this shape:
 }
 
 Rules:
-- One event per flight leg (don't combine round-trips into one event).
+- One event per flight leg, including connection segments. If the email shows
+  seat assignments like "SEA - MEX: 3E / MEX - GRU: 3D", or two flight
+  numbers ("AM495, AM14"), or "1 stop · 20h · ..." — produce TWO events
+  (SEA→MEX and MEX→GRU), not one combined SEA→GRU. Same for return.
+- For connection segments where intermediate timing isn't in the email,
+  use the same date as the outer leg and leave startTime/endTime off; user
+  can adjust later.
+- Don't combine round-trips into one event — outbound and return are
+  always separate events (and each may itself have multiple legs).
 - Hotels: one event spanning check-in date to check-out date. Lane = "lodging".
 - Use the trip context dates to disambiguate years for ambiguous dates (e.g. "Aug 13" without a year).
 - For flight titles use IATA codes: "SEA → GRU", not "Seattle to Sao Paulo".
