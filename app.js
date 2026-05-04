@@ -207,10 +207,40 @@ function load() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY());
     if (!raw) return seed();
-    Object.assign(state, JSON.parse(raw));
+    const parsed = demojibakeWalk(JSON.parse(raw));
+    Object.assign(state, parsed);
   } catch (e) {
     seed();
   }
+}
+
+// Walk an object and try to repair any string field that looks like UTF-8
+// bytes mistakenly read as Latin-1 (the '→' → 'â', '·' → 'Â·' family of
+// corruptions). Idempotent and safe on clean strings — they don't match
+// the marker regex and pass through.
+const MOJI_MARKERS = /[Ââ-]/;
+function tryDemojibake(s) {
+  if (typeof s !== "string" || !MOJI_MARKERS.test(s)) return s;
+  // Each character must fit in a single byte for re-decoding to make sense.
+  const bytes = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) {
+    const cp = s.charCodeAt(i);
+    if (cp > 0xFF) return s;
+    bytes[i] = cp;
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch { return s; }
+}
+function demojibakeWalk(v) {
+  if (typeof v === "string") return tryDemojibake(v);
+  if (Array.isArray(v)) return v.map(demojibakeWalk);
+  if (v && typeof v === "object") {
+    const out = {};
+    for (const [k, vv] of Object.entries(v)) out[k] = demojibakeWalk(vv);
+    return out;
+  }
+  return v;
 }
 
 // True while bootstrapping is loading the trip — suppresses syncs that would
@@ -4118,6 +4148,9 @@ async function bootstrap() {
           if (local[k] !== undefined) merged[k] = local[k];
         }
       }
+      // Repair any UTF-8-as-Latin-1 mojibake left over from prior PowerShell-
+      // mediated server PUTs before persisting.
+      merged = demojibakeWalk(merged);
       localStorage.setItem(STORAGE_KEY_FOR(tripId), JSON.stringify(merged));
     }
   }
