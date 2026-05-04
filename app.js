@@ -260,6 +260,14 @@ function save() {
   updateSyncIndicator();
 }
 
+// Per-device UI state — current tab, collapsed days, segment-size dropdown,
+// etc. Persists locally so it survives reloads on the same device, but does
+// NOT bump modifiedAt or push to the worker. Otherwise just clicking a tab on
+// device B with stale data would overwrite real edits made on device A.
+function saveLocal() {
+  localStorage.setItem(STORAGE_KEY(), JSON.stringify(state));
+}
+
 let SYNC_TIMER = null;
 let SYNC_PENDING = false;
 let SYNC_LAST_STATUS = null;  // "saved" | "saving" | "error" | null
@@ -653,7 +661,7 @@ function toggleShrinkDay(ds) {
   const i = state.shrunkDays.indexOf(ds);
   if (i >= 0) state.shrunkDays.splice(i, 1);
   else state.shrunkDays.push(ds);
-  save();
+  saveLocal();   // collapsed-day choice is per-device UI
   renderApp();
 }
 
@@ -2007,7 +2015,7 @@ document.getElementById("trip-end").addEventListener("change", (e) => {
 });
 document.getElementById("segment-size").addEventListener("change", (e) => {
   state.segmentSize = e.target.value;
-  save();
+  saveLocal();   // breakdown grouping is per-device UI
   renderApp();
 });
 document.getElementById("tz-aware").addEventListener("change", (e) => {
@@ -3679,7 +3687,7 @@ function renderApp() {
 document.querySelectorAll(".tab-btn").forEach(btn => {
   btn.addEventListener("click", () => {
     state.activeView = btn.dataset.tab;
-    save();
+    saveLocal();   // tab choice is per-device UI, don't push to worker
     renderApp();
   });
 });
@@ -4051,12 +4059,12 @@ wirePasteBlock({
 
 document.getElementById("option-range-start").addEventListener("change", (e) => {
   state.optionRangeStart = e.target.value || null;
-  save();
+  saveLocal();   // option-staging picker is per-device UI
   renderOptions();
 });
 document.getElementById("option-range-end").addEventListener("change", (e) => {
   state.optionRangeEnd = e.target.value || null;
-  save();
+  saveLocal();
   renderOptions();
 });
 
