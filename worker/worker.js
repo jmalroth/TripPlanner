@@ -167,7 +167,6 @@ Rules:
 - Hotels: one event spanning check-in date to check-out date. Lane = "lodging".
 - Use the trip context dates to disambiguate years for ambiguous dates (e.g. "Aug 13" without a year).
 - For flight titles use IATA codes: "SEA → GRU", not "Seattle to Sao Paulo".
-- Don't include flight numbers in title; put them in notes.
 - Skip emails that aren't about travel reservations — return events: [].
 - Output ONLY the JSON object, no commentary, no markdown fencing.`;
 
