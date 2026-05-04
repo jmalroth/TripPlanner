@@ -2208,11 +2208,14 @@ function renderHotelCompare() {
 }
 
 async function smartParseHotelRemote(input, statusEl) {
-  const pw = getOwnerPassword();
+  let pw = getOwnerPassword();
   if (!pw) {
-    statusEl.textContent = "Set the owner password first (edit something to get prompted).";
-    statusEl.className = "paste-status error";
-    return null;
+    pw = await promptForPassword("Adding a hotel needs the owner password to write back to this trip.");
+    if (!pw) {
+      statusEl.textContent = "Cancelled.";
+      statusEl.className = "paste-status error";
+      return null;
+    }
   }
   // If the entire input is a single http(s) URL, fetch the page server-side
   // instead of asking Claude to parse the literal URL string.
@@ -3724,11 +3727,14 @@ document.getElementById("add-option-btn")?.addEventListener("click", () => {
 });
 
 async function smartParseRemote(text, statusEl, existingEvents) {
-  const pw = getOwnerPassword();
+  let pw = getOwnerPassword();
   if (!pw) {
-    statusEl.textContent = "Set the owner password first (edit something to get prompted).";
-    statusEl.className = "paste-status error";
-    return null;
+    pw = await promptForPassword("Smart parse needs the owner password to write back to this trip.");
+    if (!pw) {
+      statusEl.textContent = "Cancelled.";
+      statusEl.className = "paste-status error";
+      return null;
+    }
   }
   statusEl.textContent = existingEvents ? "Asking Claude to patch existing events…" : "Parsing with Claude…";
   statusEl.className = "paste-status";
