@@ -2207,20 +2207,27 @@ function renderHotelCompare() {
   wrap.appendChild(tbl);
 }
 
-async function smartParseHotelRemote(text, statusEl) {
+async function smartParseHotelRemote(input, statusEl) {
   const pw = getOwnerPassword();
   if (!pw) {
     statusEl.textContent = "Set the owner password first (edit something to get prompted).";
     statusEl.className = "paste-status error";
     return null;
   }
-  statusEl.textContent = "Parsing hotel with Claude…";
+  // If the entire input is a single http(s) URL, fetch the page server-side
+  // instead of asking Claude to parse the literal URL string.
+  const trimmed = input.trim();
+  const urlOnly = /^https?:\/\/\S+$/i.test(trimmed) && !/\s/.test(trimmed);
+  const body = urlOnly
+    ? { url: trimmed, mode: "hotel-from-url", tripStart: state.start || null, tripEnd: state.end || null }
+    : { text: input, mode: "hotel-compare", tripStart: state.start || null, tripEnd: state.end || null };
+  statusEl.textContent = urlOnly ? `Fetching ${new URL(trimmed).hostname}…` : "Parsing hotel with Claude…";
   statusEl.className = "paste-status";
   try {
     const res = await fetch(`${SNAPSHOT_API}/smart-parse`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${pw}` },
-      body: JSON.stringify({ text, mode: "hotel-compare", tripStart: state.start || null, tripEnd: state.end || null }),
+      body: JSON.stringify(body),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || `worker ${res.status}`);
@@ -2237,16 +2244,44 @@ document.getElementById("compare-smart")?.addEventListener("click", async () => 
   const status = document.getElementById("compare-paste-status");
   const text = input.value;
   if (!text.trim()) {
-    status.textContent = "Paste a hotel listing first.";
+    status.textContent = "Paste a hotel listing or URL first.";
     status.className = "paste-status error";
     return;
   }
+  // Detect a list of URLs, one per line — process each as its own hotel.
+  // If the input has any non-URL text mixed in, fall through to single-paste
+  // mode (Claude treats the whole thing as one listing).
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const allUrls = lines.length > 1 && lines.every(l => /^https?:\/\/\S+$/i.test(l));
   const btn = document.getElementById("compare-smart");
   btn.disabled = true;
+  ensureHotelCompare();
+  if (allUrls) {
+    let added = 0; let failed = 0;
+    for (let i = 0; i < lines.length; i++) {
+      status.textContent = `Fetching ${i + 1}/${lines.length}: ${new URL(lines[i]).hostname}…`;
+      status.className = "paste-status";
+      const data = await smartParseHotelRemote(lines[i], status);
+      if (data) {
+        state.hotelCompare.push({ id: uid(), ...data });
+        save();
+        renderHotelCompare();
+        added++;
+      } else {
+        failed++;
+      }
+    }
+    btn.disabled = false;
+    status.textContent = failed === 0
+      ? `Added ${added} hotels to comparison.`
+      : `Added ${added}; ${failed} URL(s) failed (likely bot-blocked).`;
+    status.className = failed === 0 ? "paste-status success" : "paste-status";
+    input.value = "";
+    return;
+  }
   const data = await smartParseHotelRemote(text, status);
   btn.disabled = false;
   if (!data) return;
-  ensureHotelCompare();
   state.hotelCompare.push({ id: uid(), ...data });
   save();
   status.textContent = `Added ${data.name || "hotel"} to comparison.`;

@@ -125,16 +125,26 @@ export default {
       let body;
       try { body = await req.json(); } catch { return json({ error: "invalid JSON" }, { status: 400 }); }
       const text = (body.text || "").toString();
-      if (!text.trim()) return json({ error: "empty text" }, { status: 400 });
+      const mode = body.mode || null;
+      // URL mode supplies a url instead of text; defer the empty-text check.
+      if (mode !== "hotel-from-url" && !text.trim()) return json({ error: "empty text" }, { status: 400 });
       if (text.length > 100_000) return json({ error: "text too long" }, { status: 413 });
       const tripStart = body.tripStart || null;
       const tripEnd = body.tripEnd || null;
       const existingEvents = Array.isArray(body.existingEvents) ? body.existingEvents : null;
-      const mode = body.mode || null;
       try {
         const apiKey = (env.ANTHROPIC_API_KEY || "").trim();
         if (mode === "hotel-compare") {
           const result = await parseHotelForCompare(text, tripStart, tripEnd, apiKey);
+          return json(result);
+        }
+        if (mode === "hotel-from-url") {
+          const url = (body.url || "").toString();
+          if (!/^https?:\/\//i.test(url)) return json({ error: "url must start with http(s)://" }, { status: 400 });
+          const fetched = await fetchHotelPage(url);
+          if (!fetched.ok) return json({ error: fetched.error }, { status: 502 });
+          const result = await parseHotelForCompare(fetched.text, tripStart, tripEnd, apiKey);
+          if (!result.url) result.url = url;
           return json(result);
         }
         const result = await smartParse(text, tripStart, tripEnd, apiKey, existingEvents);
@@ -147,6 +157,51 @@ export default {
     return json({ error: "not found" }, { status: 404 });
   },
 };
+
+// Fetch a hotel page and reduce its HTML to readable text. Best-effort —
+// returns { ok: true, text } or { ok: false, error }. Sites that gate
+// behind bot detection or render content via JS will fail here.
+async function fetchHotelPage(url) {
+  let res;
+  try {
+    res = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+      redirect: "follow",
+    });
+  } catch (e) {
+    return { ok: false, error: `fetch failed: ${e.message}` };
+  }
+  if (!res.ok) return { ok: false, error: `${url} returned ${res.status}` };
+  const ct = res.headers.get("content-type") || "";
+  if (!/html|text/i.test(ct)) return { ok: false, error: `unsupported content-type: ${ct}` };
+  let html = await res.text();
+  if (html.length > 500_000) html = html.slice(0, 500_000);
+  // Strip scripts/styles/comments and collapse whitespace. Crude but enough
+  // for Claude to understand what's on the page.
+  let text = html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<\/?[a-z][^>]*>/gi, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (text.length < 200) {
+    return { ok: false, error: "page returned too little text — likely JS-rendered or bot-blocked. Try pasting the visible text instead." };
+  }
+  if (text.length > 80_000) text = text.slice(0, 80_000);
+  return { ok: true, text };
+}
 
 // Extract a single hotel from a listing/email for the comparison table.
 async function parseHotelForCompare(text, tripStart, tripEnd, apiKey) {
