@@ -2133,11 +2133,35 @@ document.getElementById("share-btn")?.addEventListener("click", shareTrip);
 
 function ensureHotelCompare() {
   if (!Array.isArray(state.hotelCompare)) state.hotelCompare = [];
-  // Backfill ratings/comments arrays on hotels added before this feature.
+  if (!Array.isArray(state.hotelGroups)) state.hotelGroups = [];
+  // Backfill ratings/comments arrays + group + url fields on hotels added
+  // before this feature.
   for (const h of state.hotelCompare) {
     if (!Array.isArray(h.ratings)) h.ratings = [];
     if (!Array.isArray(h.comments)) h.comments = [];
+    if (h.compareOpen == null) h.compareOpen = false;
+    if (!h.sourceUrl && h.url) h.sourceUrl = h.url;
   }
+  // Make sure there's always at least one group, and every hotel belongs.
+  const orphans = state.hotelCompare.filter(h => !h.groupId);
+  if (orphans.length || (state.hotelCompare.length === 0 && state.hotelGroups.length === 0)) {
+    let g = state.hotelGroups[0];
+    if (!g) {
+      g = { id: uid(), name: "Hotels" };
+      state.hotelGroups.push(g);
+    }
+    orphans.forEach(h => { h.groupId = g.id; });
+  }
+}
+
+function createHotelGroup(name) {
+  ensureHotelCompare();
+  const taken = new Set(state.hotelGroups.map(g => g.name));
+  let n = 1;
+  while (taken.has(`Group ${n}`)) n++;
+  const g = { id: uid(), name: name || `Group ${n}` };
+  state.hotelGroups.push(g);
+  return g;
 }
 
 const DISPLAY_NAME_KEY = "trip-builder-display-name";
@@ -2161,25 +2185,191 @@ function avgRating(ratings) {
   return sum / ratings.length;
 }
 
+const fmtHotelPrice = (n, ccy) => {
+  if (n == null) return "—";
+  const sym = ccy === "USD" ? "$" : ccy ? `${ccy} ` : "$";
+  return `${sym}${Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+};
+
 function renderHotelCompare() {
   ensureHotelCompare();
   const wrap = document.getElementById("compare-table");
   if (!wrap) return;
   wrap.innerHTML = "";
-  if (state.hotelCompare.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "compare-empty";
-    empty.textContent = "No hotels yet — paste one above to start comparing.";
-    wrap.appendChild(empty);
-    return;
+
+  // For each group: header + a horizontal row of compact hotel cards.
+  for (const group of state.hotelGroups) {
+    const groupEl = document.createElement("div");
+    groupEl.className = "hotel-group";
+
+    const headRow = document.createElement("div");
+    headRow.className = "hotel-group-head";
+    const nameInput = document.createElement("input");
+    nameInput.className = "hotel-group-name";
+    nameInput.value = group.name;
+    nameInput.placeholder = "Group name";
+    nameInput.addEventListener("input", () => { group.name = nameInput.value; save(); });
+    headRow.appendChild(nameInput);
+
+    const headActions = document.createElement("div");
+    headActions.className = "hotel-group-actions";
+    const addHotelBtn = document.createElement("button");
+    addHotelBtn.type = "button";
+    addHotelBtn.textContent = "+ Add hotel";
+    addHotelBtn.addEventListener("click", () => {
+      state.hotelCompare.push({ id: uid(), groupId: group.id, name: "New hotel", ratings: [], comments: [], compareOpen: false });
+      save();
+      renderHotelCompare();
+    });
+    headActions.appendChild(addHotelBtn);
+    const delGroupBtn = document.createElement("button");
+    delGroupBtn.type = "button";
+    delGroupBtn.className = "ghost";
+    delGroupBtn.textContent = "Delete group";
+    delGroupBtn.addEventListener("click", () => {
+      const inGroup = state.hotelCompare.filter(h => h.groupId === group.id);
+      if (inGroup.length && !confirm(`Delete group "${group.name}" and its ${inGroup.length} hotel${inGroup.length === 1 ? "" : "s"}?`)) return;
+      state.hotelCompare = state.hotelCompare.filter(h => h.groupId !== group.id);
+      state.hotelGroups = state.hotelGroups.filter(g => g.id !== group.id);
+      save();
+      renderHotelCompare();
+    });
+    headActions.appendChild(delGroupBtn);
+    headRow.appendChild(headActions);
+    groupEl.appendChild(headRow);
+
+    const hotelsInGroup = state.hotelCompare.filter(h => h.groupId === group.id);
+
+    // Compact card row at the top of the group.
+    const cardRow = document.createElement("div");
+    cardRow.className = "hotel-card-row";
+    if (hotelsInGroup.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "compare-empty";
+      empty.textContent = "No hotels yet — paste one above or click + Add hotel.";
+      cardRow.appendChild(empty);
+    }
+    for (const h of hotelsInGroup) {
+      cardRow.appendChild(renderHotelCard(h));
+    }
+    groupEl.appendChild(cardRow);
+
+    // Detailed comparison table — only includes hotels with compareOpen = true.
+    const selected = hotelsInGroup.filter(h => h.compareOpen);
+    if (selected.length) {
+      groupEl.appendChild(renderHotelTable(selected));
+    }
+    wrap.appendChild(groupEl);
   }
 
-  const fmtPrice = (n, ccy) => {
-    if (n == null) return "—";
-    const sym = ccy === "USD" ? "$" : ccy ? `${ccy} ` : "$";
-    return `${sym}${Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
-  };
+  // "+ Add hotel group" button.
+  const addGroupBtn = document.createElement("button");
+  addGroupBtn.type = "button";
+  addGroupBtn.className = "add-hotel-group";
+  addGroupBtn.textContent = "+ Add hotel group";
+  addGroupBtn.addEventListener("click", () => {
+    createHotelGroup();
+    save();
+    renderHotelCompare();
+  });
+  wrap.appendChild(addGroupBtn);
+}
 
+function renderHotelCard(h) {
+  const card = document.createElement("div");
+  card.className = "hotel-card" + (h.compareOpen ? " compare-on" : "");
+
+  const top = document.createElement("div");
+  top.className = "hotel-card-top";
+  const nameInput = document.createElement("input");
+  nameInput.className = "hotel-card-name";
+  nameInput.value = h.name || "";
+  nameInput.placeholder = "Hotel name";
+  nameInput.addEventListener("input", () => { h.name = nameInput.value; save(); });
+  top.appendChild(nameInput);
+  const priceWrap = document.createElement("div");
+  priceWrap.className = "hotel-card-price";
+  priceWrap.textContent = fmtHotelPrice(h.pricePerNight, h.currency);
+  if (h.pricePerNight != null) {
+    const per = document.createElement("span");
+    per.className = "per-night";
+    per.textContent = "/night";
+    priceWrap.appendChild(per);
+  }
+  top.appendChild(priceWrap);
+  card.appendChild(top);
+
+  // Comment line (single inline note, separate from the multi-author comments table)
+  const noteInput = document.createElement("input");
+  noteInput.className = "hotel-card-note";
+  noteInput.value = h.note || "";
+  noteInput.placeholder = "Quick comment / note";
+  noteInput.addEventListener("input", () => { h.note = noteInput.value; save(); });
+  card.appendChild(noteInput);
+
+  // Editable URL fields.
+  const urls = document.createElement("div");
+  urls.className = "hotel-card-urls";
+  const makeUrlField = (label, key) => {
+    const wrap = document.createElement("div");
+    wrap.className = "hotel-card-url-row";
+    const lbl = document.createElement("span");
+    lbl.className = "url-label";
+    lbl.textContent = label;
+    wrap.appendChild(lbl);
+    const input = document.createElement("input");
+    input.className = "url-input";
+    input.type = "url";
+    input.value = h[key] || "";
+    input.placeholder = "https://…";
+    input.addEventListener("input", () => { h[key] = input.value || null; save(); refreshUrlOpen(); });
+    wrap.appendChild(input);
+    const open = document.createElement("a");
+    open.className = "url-open";
+    open.target = "_blank";
+    open.rel = "noopener";
+    open.textContent = "open";
+    const refreshUrlOpen = () => {
+      if (h[key]) { open.href = h[key]; open.style.visibility = "visible"; }
+      else { open.removeAttribute("href"); open.style.visibility = "hidden"; }
+    };
+    refreshUrlOpen();
+    wrap.appendChild(open);
+    return wrap;
+  };
+  urls.appendChild(makeUrlField("source", "sourceUrl"));
+  urls.appendChild(makeUrlField("website", "websiteUrl"));
+  card.appendChild(urls);
+
+  const actions = document.createElement("div");
+  actions.className = "hotel-card-actions";
+  const compareBtn = document.createElement("button");
+  compareBtn.type = "button";
+  compareBtn.className = h.compareOpen ? "primary" : "";
+  compareBtn.textContent = h.compareOpen ? "Hide details" : "Compare";
+  compareBtn.addEventListener("click", () => {
+    h.compareOpen = !h.compareOpen;
+    save();
+    renderHotelCompare();
+  });
+  actions.appendChild(compareBtn);
+  const del = document.createElement("button");
+  del.type = "button";
+  del.className = "ghost";
+  del.textContent = "×";
+  del.title = "Remove";
+  del.addEventListener("click", () => {
+    state.hotelCompare = state.hotelCompare.filter(x => x.id !== h.id);
+    save();
+    renderHotelCompare();
+  });
+  actions.appendChild(del);
+  card.appendChild(actions);
+  return card;
+}
+
+function renderHotelTable(hotels) {
+  const fmtPrice = fmtHotelPrice;
   const ROWS = [
     ["Platform",     h => h.platform || "—"],
     ["Check in",     h => h.checkIn  || "—"],
@@ -2192,15 +2382,15 @@ function renderHotelCompare() {
     ["Cancellation", h => h.cancellation || "—"],
     ["Amenities",    h => Array.isArray(h.amenities) && h.amenities.length ? h.amenities.join(", ") : "—"],
     ["Notes",        h => h.notes || "—"],
-    ["Link",         h => h.url ? `<a href="${h.url}" target="_blank" rel="noopener">open</a>` : "—"],
+    ["Source",       h => h.sourceUrl ? `<a href="${escHtml(h.sourceUrl)}" target="_blank" rel="noopener">open</a>` : "—"],
+    ["Website",      h => h.websiteUrl ? `<a href="${escHtml(h.websiteUrl)}" target="_blank" rel="noopener">open</a>` : "—"],
   ];
 
-  // Header row with hotel names + delete buttons.
   const tbl = document.createElement("table");
   tbl.className = "compare-table";
   const head = document.createElement("tr");
   head.appendChild(document.createElement("th"));
-  for (const h of state.hotelCompare) {
+  for (const h of hotels) {
     const th = document.createElement("th");
     const name = document.createElement("div");
     name.className = "compare-name";
@@ -2226,10 +2416,10 @@ function renderHotelCompare() {
     lblTh.className = "compare-label";
     lblTh.textContent = label;
     tr.appendChild(lblTh);
-    for (const h of state.hotelCompare) {
+    for (const h of hotels) {
       const td = document.createElement("td");
       const v = getter(h);
-      if (label === "Link" && h.url) td.innerHTML = v;
+      if ((label === "Source" && h.sourceUrl) || (label === "Website" && h.websiteUrl)) td.innerHTML = v;
       else td.textContent = v;
       tr.appendChild(td);
     }
@@ -2242,7 +2432,7 @@ function renderHotelCompare() {
   ratingsLabel.className = "compare-label";
   ratingsLabel.textContent = "Group ratings";
   ratingsTr.appendChild(ratingsLabel);
-  for (const h of state.hotelCompare) {
+  for (const h of hotels) {
     const td = document.createElement("td");
     td.className = "compare-ratings";
     const avg = avgRating(h.ratings);
@@ -2301,7 +2491,7 @@ function renderHotelCompare() {
   commentsLabel.className = "compare-label";
   commentsLabel.textContent = "Comments";
   commentsTr.appendChild(commentsLabel);
-  for (const h of state.hotelCompare) {
+  for (const h of hotels) {
     const td = document.createElement("td");
     td.className = "compare-comments";
     for (const c of h.comments) {
@@ -2345,7 +2535,7 @@ function renderHotelCompare() {
   }
   tbl.appendChild(commentsTr);
 
-  wrap.appendChild(tbl);
+  return tbl;
 }
 
 async function smartParseHotelRemote(input, statusEl) {
@@ -2407,7 +2597,13 @@ document.getElementById("compare-smart")?.addEventListener("click", async () => 
       status.className = "paste-status";
       const data = await smartParseHotelRemote(lines[i], status);
       if (data) {
-        state.hotelCompare.push({ id: uid(), ...data });
+        state.hotelCompare.push({
+          id: uid(),
+          groupId: state.hotelGroups[state.hotelGroups.length - 1]?.id,
+          ...data,
+          sourceUrl: data.sourceUrl || data.url || null,
+          websiteUrl: data.websiteUrl || data.website || null,
+        });
         save();
         renderHotelCompare();
         added++;

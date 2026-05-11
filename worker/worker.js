@@ -222,7 +222,8 @@ should be null (don't make up values):
   "currency":     "string or null (USD, BRL, EUR, etc.)",
   "amenities":    "array of short strings (e.g. ['Free WiFi','Breakfast','Pool'])",
   "cancellation": "string or null (short summary)",
-  "url":          "string or null (if visible in paste)",
+  "sourceUrl":    "string or null (the URL of the page/listing where the price was found — e.g. the Booking.com or Expedia listing URL)",
+  "websiteUrl":   "string or null (the hotel's own website URL if visible, separate from the booking-platform URL)",
   "notes":        "string or null (anything else worth comparing — view, room type, host, etc.)"
 }
 
