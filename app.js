@@ -1865,10 +1865,16 @@ function render() {
 
   // Breakdown: fixed day width — short segments stay physically short.
   breakdown.innerHTML = "";
+
+  // Region day-count summary: total days at each "Where" location, so users
+  // see "Zanzibar 6d · Safari 5d · Seychelles 7d" at a glance.
+  const regionRow = renderRegionSummary();
+  if (regionRow) breakdown.appendChild(regionRow);
+
   const segSize = chooseSegmentSize(totalDays);
 
   if (totalDays <= 7 || segSize >= totalDays) {
-    breakdown.innerHTML = `<div class="empty-state">Trip is short — overview shows the full breakdown.</div>`;
+    breakdown.appendChild(Object.assign(document.createElement("div"), { className: "empty-state", textContent: "Trip is short — overview shows the full breakdown." }));
     return;
   }
 
@@ -1916,6 +1922,40 @@ function render() {
     cursor = addDays(cursor, segSize);
     idx++;
   }
+}
+
+// Sum days at each location ("Where" lane). Returns a chip row element, or
+// null if there are no location events.
+function renderRegionSummary() {
+  const locs = state.events.filter(ev => ev.lane === "location" && ev.start && ev.end);
+  if (locs.length === 0) return null;
+  const totals = new Map();
+  for (const ev of locs) {
+    const days = dayDiff(ev.start, ev.end) + 1;
+    const key = (ev.title || "Untitled").trim();
+    totals.set(key, (totals.get(key) || 0) + days);
+  }
+  const row = document.createElement("div");
+  row.className = "region-summary";
+  for (const [name, days] of totals) {
+    const chip = document.createElement("span");
+    chip.className = "region-chip";
+    const lbl = document.createElement("span");
+    lbl.className = "region-label";
+    lbl.textContent = name;
+    const val = document.createElement("span");
+    val.className = "region-days";
+    val.textContent = `${days}d`;
+    chip.appendChild(lbl);
+    chip.appendChild(val);
+    row.appendChild(chip);
+  }
+  const total = [...totals.values()].reduce((s, n) => s + n, 0);
+  const tot = document.createElement("span");
+  tot.className = "region-chip region-total";
+  tot.textContent = `Total ${total}d`;
+  row.appendChild(tot);
+  return row;
 }
 
 // --- event dialog ---
@@ -2276,9 +2316,14 @@ function renderHotelCompare() {
   addTab.addEventListener("click", (e) => {
     e.stopPropagation();
     menu.hidden = !menu.hidden;
+    addWrap.classList.toggle("menu-open", !menu.hidden);
     if (!menu.hidden) {
       const close = (ev) => {
-        if (!addWrap.contains(ev.target)) { menu.hidden = true; document.removeEventListener("click", close); }
+        if (!addWrap.contains(ev.target)) {
+          menu.hidden = true;
+          addWrap.classList.remove("menu-open");
+          document.removeEventListener("click", close);
+        }
       };
       setTimeout(() => document.addEventListener("click", close));
     }
@@ -4836,3 +4881,15 @@ async function bootstrap() {
 }
 
 bootstrap();
+
+// Re-render on orientation/viewport changes so the breakdown timeline
+// (which uses a fixed day-width sized from clientWidth) doesn't stay
+// clipped after rotating from portrait to landscape.
+let resizeTimer = null;
+window.addEventListener("resize", () => {
+  if (resizeTimer) clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    if (state.activeView === "main") render();
+    else if (state.activeView === "options") renderOptions();
+  }, 150);
+});
