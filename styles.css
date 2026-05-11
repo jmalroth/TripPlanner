@@ -213,12 +213,12 @@ button.smart:disabled { opacity: 0.6; cursor: progress; }
 .hotel-card-actions button { font-size: 12px; padding: 4px 8px; }
 .add-hotel-group { margin-top: 4px; padding: 8px 12px; border: 1px dashed var(--line); border-radius: 6px; background: transparent; cursor: pointer; color: var(--muted); font-size: 13px; }
 .add-hotel-group:hover { color: var(--text); border-color: var(--text); }
-.hotel-subnav { display: flex; gap: 6px; flex-wrap: wrap; padding-bottom: 8px; border-bottom: 1px solid var(--line); margin-bottom: 12px; }
-.hotel-subnav-tab { padding: 6px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2); cursor: pointer; font-size: 13px; color: var(--text); }
-.hotel-subnav-tab:hover { background: var(--panel); }
-.hotel-subnav-tab.active { background: #6366f1; color: #fff; border-color: #6366f1; font-weight: 600; }
-.hotel-subnav-add { padding: 6px 12px; border: 1px dashed var(--line); border-radius: 6px; background: transparent; cursor: pointer; font-size: 13px; color: var(--muted); }
-.hotel-subnav-add:hover { color: var(--text); border-color: var(--text); }
+.hotel-subnav, .option-subnav { display: flex; gap: 0; flex-wrap: wrap; border-bottom: 1px solid var(--line); margin-bottom: 16px; align-items: flex-end; }
+.hotel-subnav-tab, .option-subnav-tab { background: transparent; color: var(--muted); border: none; border-radius: 0; padding: 10px 14px; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.hotel-subnav-tab:hover, .option-subnav-tab:hover { color: var(--text); background: transparent; }
+.hotel-subnav-tab.active, .option-subnav-tab.active { color: var(--accent); border-bottom-color: var(--accent); background: transparent; font-weight: 600; }
+.hotel-subnav-add, .option-subnav-add { background: transparent; color: var(--muted); border: none; padding: 10px 14px; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; cursor: pointer; margin-bottom: -1px; }
+.hotel-subnav-add:hover, .option-subnav-add:hover { color: var(--text); }
 .compare-table {
   border-collapse: collapse;
   margin-top: 12px;
@@ -606,12 +606,6 @@ main {
 .option-group-actions { margin-left: auto; display: inline-flex; gap: 8px; }
 .add-option-group { margin: 4px 0 16px; padding: 8px 12px; border: 1px dashed var(--line); border-radius: 6px; background: transparent; cursor: pointer; color: var(--muted); font-size: 13px; }
 .add-option-group:hover { color: var(--text); border-color: var(--text); }
-.option-subnav { display: flex; gap: 6px; flex-wrap: wrap; padding-bottom: 8px; border-bottom: 1px solid var(--line); margin-bottom: 12px; }
-.option-subnav-tab { padding: 6px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2); cursor: pointer; font-size: 13px; color: var(--text); }
-.option-subnav-tab:hover { background: var(--panel); }
-.option-subnav-tab.active { background: #6366f1; color: #fff; border-color: #6366f1; font-weight: 600; }
-.option-subnav-add { padding: 6px 12px; border: 1px dashed var(--line); border-radius: 6px; background: transparent; cursor: pointer; font-size: 13px; color: var(--muted); }
-.option-subnav-add:hover { color: var(--text); border-color: var(--text); }
 
 .option-head {
   display: flex;
