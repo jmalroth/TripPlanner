@@ -941,8 +941,10 @@ const LANE_LABEL = { location: "Where", lodging: "Lodging", flights: "Flights", 
 const LANE_ORDER = ["flights", "lodging", "rental", "activities", "location"];
 
 function fmtMoney(n) {
-  if (typeof n !== "number" || isNaN(n)) return "$0.00";
-  return "$" + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  if (typeof n !== "number" || isNaN(n)) return "$0";
+  const sign = n < 0 ? "-" : "";
+  const rounded = String(Math.round(Math.abs(n)));
+  return sign + "$" + rounded.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
 
 function ensureLineItems() {
@@ -1223,8 +1225,17 @@ function editLineItem(id) {
   formTotalInput = String(lineItemTotal(li) || "");
   // Load overrides.
   for (const k of Object.keys(formOverrides)) delete formOverrides[k];
+  for (const k of Object.keys(formOverrideModes)) delete formOverrideModes[k];
   if (li.overrides) {
-    for (const [k, v] of Object.entries(li.overrides)) formOverrides[k] = String(v);
+    for (const [k, v] of Object.entries(li.overrides)) {
+      if (v && typeof v === "object" && "pct" in v) {
+        formOverrides[k] = String(v.pct);
+        formOverrideModes[k] = "%";
+      } else {
+        formOverrides[k] = String(v);
+        formOverrideModes[k] = "$";
+      }
+    }
   }
   const addBtn = document.getElementById("pricing-add-btn");
   if (addBtn) addBtn.textContent = "Save changes";
@@ -1240,6 +1251,7 @@ function cancelLineItemEdit() {
   document.getElementById("pricing-label").value = "";
   formTotalInput = "";
   for (const k of Object.keys(formOverrides)) delete formOverrides[k];
+  for (const k of Object.keys(formOverrideModes)) delete formOverrideModes[k];
   const addBtn = document.getElementById("pricing-add-btn");
   if (addBtn) addBtn.textContent = "+ Add line item";
   const cancelBtn = document.getElementById("pricing-cancel-edit");
@@ -1333,16 +1345,49 @@ function lineItemTotal(li) {
   }
   return Number(li.cost) || 0;
 }
-function lineItemGroupAmount(li, groupId, groupIdx) {
-  // Override wins.
-  if (li.overrides && li.overrides[groupId] != null) {
-    const v = parseAmount(li.overrides[groupId]);
-    return isNaN(v) ? 0 : v;
+// Resolve a single override entry to a $ amount given the line-item total.
+// Returns NaN for invalid entries; null if no override set.
+function resolveOverrideAmount(entry, total) {
+  if (entry == null) return null;
+  if (entry && typeof entry === "object" && "pct" in entry) {
+    const pct = Number(entry.pct);
+    return isNaN(pct) ? NaN : total * (pct / 100);
   }
-  // New shape: total × group.share.
+  return parseAmount(entry);
+}
+
+// Compute per-group $ amounts for a total + overrides map. Overridden groups
+// take their explicit amount; remaining groups split the leftover by their
+// default shares (normalized among themselves).
+function splitWithOverrides(total, overrides, groups) {
+  let overSum = 0;
+  let unsharedShare = 0;
+  const overrideAmts = {};
+  for (const g of groups) {
+    const v = resolveOverrideAmount(overrides?.[g.id], total);
+    if (v != null && !isNaN(v)) {
+      overrideAmts[g.id] = v;
+      overSum += v;
+    } else {
+      unsharedShare += g.share || 0;
+    }
+  }
+  const remainder = total - overSum;
+  const out = {};
+  for (const g of groups) {
+    if (g.id in overrideAmts) out[g.id] = overrideAmts[g.id];
+    else if (unsharedShare > 0) out[g.id] = remainder * ((g.share || 0) / unsharedShare);
+    else out[g.id] = 0;
+  }
+  return { amounts: out, remainder, overSum };
+}
+
+function lineItemGroupAmount(li, groupId, groupIdx) {
   if (li.total != null) {
-    const grp = state.priceSplit.groups.find(g => g.id === groupId);
-    return (li.total || 0) * (grp?.share || 0);
+    const { amounts } = splitWithOverrides(
+      Number(li.total) || 0, li.overrides || {}, state.priceSplit.groups
+    );
+    return amounts[groupId] || 0;
   }
   // Legacy parties model: amount stored per party; map by index.
   if (li.pricing && Array.isArray(li.pricing.parties)) {
@@ -1365,6 +1410,7 @@ function lineItemOthersTotal(li) {
 // Working state for the add/edit line-item form.
 let formTotalInput = "";
 const formOverrides = {}; // { groupId: input string }
+const formOverrideModes = {}; // { groupId: "$" | "%" }
 
 function refreshSplitDisplay() {
   // Update the % spans + warn + downstream pricing without rebuilding rows.
@@ -1491,19 +1537,37 @@ function renderLineItemForm() {
       const lab = document.createElement("span");
       lab.className = "or-label";
       lab.textContent = g.name;
+      if (!formOverrideModes[g.id]) formOverrideModes[g.id] = "$";
+      const modeBtn = document.createElement("button");
+      modeBtn.type = "button";
+      modeBtn.className = "or-mode";
+      modeBtn.textContent = formOverrideModes[g.id];
+      modeBtn.title = "Toggle override mode ($ amount vs % of total)";
       const input = document.createElement("input");
       input.type = "text";
       input.className = "or-input";
-      input.placeholder = `(default ${(g.share * 100).toFixed(0)}%)`;
+      const setPlaceholder = () => {
+        input.placeholder = formOverrideModes[g.id] === "%"
+          ? `(default ${(g.share * 100).toFixed(0)})`
+          : `(default ${(g.share * 100).toFixed(0)}%)`;
+      };
+      setPlaceholder();
       input.value = formOverrides[g.id] || "";
       input.addEventListener("input", () => {
         if (input.value === "") delete formOverrides[g.id];
         else formOverrides[g.id] = input.value;
         updateLineItemFormBreakdown();
       });
+      modeBtn.addEventListener("click", () => {
+        formOverrideModes[g.id] = formOverrideModes[g.id] === "%" ? "$" : "%";
+        modeBtn.textContent = formOverrideModes[g.id];
+        setPlaceholder();
+        updateLineItemFormBreakdown();
+      });
       const def = document.createElement("span");
       def.className = "or-default";
       row.appendChild(lab);
+      row.appendChild(modeBtn);
       row.appendChild(input);
       row.appendChild(def);
       orContainer.appendChild(row);
@@ -1514,15 +1578,29 @@ function renderLineItemForm() {
 
 function updateLineItemFormBreakdown() {
   const total = parseAmount(formTotalInput) || 0;
-  const out = state.priceSplit.groups.map(g => {
-    if (formOverrides[g.id] != null && formOverrides[g.id] !== "") {
-      const v = parseAmount(formOverrides[g.id]);
-      return `${g.name}: ${fmtMoney(isNaN(v) ? 0 : v)}`;
-    }
-    return `${g.name}: ${fmtMoney(total * (g.share || 0))}`;
-  });
+  // Build an overrides map matching the saved shape so we can reuse the helper.
+  const overrides = {};
+  for (const g of state.priceSplit.groups) {
+    const raw = formOverrides[g.id];
+    if (raw == null || raw === "") continue;
+    const v = parseAmount(raw);
+    if (isNaN(v)) continue;
+    overrides[g.id] = formOverrideModes[g.id] === "%" ? { pct: v } : v;
+  }
+  const { amounts } = splitWithOverrides(total, overrides, state.priceSplit.groups);
+  const out = state.priceSplit.groups.map(g => `${g.name}: ${fmtMoney(amounts[g.id] || 0)}`);
   const breakdown = document.getElementById("pricing-default-breakdown");
   if (breakdown) breakdown.textContent = out.join(" · ");
+  // Update each row's computed-amount display.
+  const rows = document.querySelectorAll("#pricing-overrides-rows .pricing-override-row");
+  rows.forEach((row, idx) => {
+    const g = state.priceSplit.groups[idx];
+    if (!g) return;
+    const def = row.querySelector(".or-default");
+    if (!def) return;
+    const isOverridden = g.id in overrides;
+    def.textContent = `= ${fmtMoney(amounts[g.id] || 0)}` + (isOverridden ? "" : " (remainder)");
+  });
 }
 
 function addPricingLineItem() {
@@ -1539,7 +1617,8 @@ function addPricingLineItem() {
   for (const [gid, raw] of Object.entries(formOverrides)) {
     if (raw == null || raw === "") continue;
     const v = parseAmount(raw);
-    if (!isNaN(v)) overrides[gid] = v;
+    if (isNaN(v)) continue;
+    overrides[gid] = formOverrideModes[gid] === "%" ? { pct: v } : v;
   }
   if (editingLineItemId) {
     const li = state.lineItems.find(x => x.id === editingLineItemId);
@@ -1569,6 +1648,7 @@ function addPricingLineItem() {
   labelInput.value = "";
   formTotalInput = "";
   for (const k of Object.keys(formOverrides)) delete formOverrides[k];
+  for (const k of Object.keys(formOverrideModes)) delete formOverrideModes[k];
   save();
   renderPricing();
 }
