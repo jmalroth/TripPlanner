@@ -300,10 +300,14 @@ async function syncNow() {
   updateSyncIndicator();
   const res = await putTrip(slug, state);
   if (res.ok) {
+    const wasEdit = CAN_EDIT, wasPricing = CAN_SEE_PRICING;
     CAN_EDIT = true;
     CAN_SEE_PRICING = true;
     SYNC_LAST_STATUS = "saved";
-    renderApp();  // pricing tab may need to appear
+    // Only re-render if a permission changed (i.e. the pricing tab needs to
+    // appear). Otherwise we'd blow away focus on an input the user is
+    // typing in.
+    if (!wasEdit || !wasPricing) renderApp();
   } else if (res.status === 401) {
     SYNC_LAST_STATUS = "error";
     setOwnerPassword(null);
