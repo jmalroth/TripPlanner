@@ -2277,17 +2277,22 @@ function renderHotelCompare() {
 
 function renderHotelCard(h) {
   const card = document.createElement("div");
-  card.className = "hotel-card" + (h.compareOpen ? " compare-on" : "");
+  card.className = "hotel-card"
+    + (h.compareOpen ? " compare-on" : "")
+    + (h.cardOpen ? " card-open" : "");
 
+  // One-line summary row — click to expand/collapse details below.
   const top = document.createElement("div");
   top.className = "hotel-card-top";
-  const nameInput = document.createElement("input");
-  nameInput.className = "hotel-card-name";
-  nameInput.value = h.name || "";
-  nameInput.placeholder = "Hotel name";
-  nameInput.addEventListener("input", () => { h.name = nameInput.value; save(); });
-  top.appendChild(nameInput);
-  const priceWrap = document.createElement("div");
+  const chev = document.createElement("span");
+  chev.className = "hotel-card-chev";
+  chev.textContent = h.cardOpen ? "▾" : "▸";
+  top.appendChild(chev);
+  const nameLabel = document.createElement("span");
+  nameLabel.className = "hotel-card-name-label";
+  nameLabel.textContent = h.name || "(unnamed hotel)";
+  top.appendChild(nameLabel);
+  const priceWrap = document.createElement("span");
   priceWrap.className = "hotel-card-price";
   priceWrap.textContent = fmtHotelPrice(h.pricePerNight, h.currency);
   if (h.pricePerNight != null) {
@@ -2297,7 +2302,41 @@ function renderHotelCard(h) {
     priceWrap.appendChild(per);
   }
   top.appendChild(priceWrap);
+  top.addEventListener("click", () => {
+    h.cardOpen = !h.cardOpen;
+    save();
+    renderHotelCompare();
+  });
   card.appendChild(top);
+
+  if (!h.cardOpen) return card;
+
+  // Expanded details below.
+  const nameInput = document.createElement("input");
+  nameInput.className = "hotel-card-name";
+  nameInput.value = h.name || "";
+  nameInput.placeholder = "Hotel name";
+  nameInput.addEventListener("input", () => { h.name = nameInput.value; save(); });
+  card.appendChild(nameInput);
+
+  const priceEdit = document.createElement("div");
+  priceEdit.className = "hotel-card-price-edit";
+  const priceLbl = document.createElement("span");
+  priceLbl.className = "url-label";
+  priceLbl.textContent = "$ / night";
+  priceEdit.appendChild(priceLbl);
+  const priceInput = document.createElement("input");
+  priceInput.type = "text";
+  priceInput.inputMode = "decimal";
+  priceInput.className = "url-input";
+  priceInput.value = h.pricePerNight != null ? String(h.pricePerNight) : "";
+  priceInput.addEventListener("input", () => {
+    const v = priceInput.value.replace(/[^0-9.]/g, "");
+    h.pricePerNight = v === "" ? null : Number(v);
+    save();
+  });
+  priceEdit.appendChild(priceInput);
+  card.appendChild(priceEdit);
 
   // Comment line (single inline note, separate from the multi-author comments table)
   const noteInput = document.createElement("input");

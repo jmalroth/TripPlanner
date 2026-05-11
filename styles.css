@@ -191,13 +191,18 @@ button.smart:disabled { opacity: 0.6; cursor: progress; }
 .hotel-group-head { display: flex; gap: 8px; align-items: center; }
 .hotel-group-name { flex: 0 1 280px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; font-size: 15px; font-weight: 600; }
 .hotel-group-actions { margin-left: auto; display: inline-flex; gap: 8px; }
-.hotel-card-row { display: flex; gap: 10px; flex-wrap: wrap; }
-.hotel-card { flex: 0 0 240px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); display: flex; flex-direction: column; gap: 6px; }
+.hotel-card-row { display: flex; flex-direction: column; gap: 6px; }
+.hotel-card { padding: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); overflow: hidden; }
 .hotel-card.compare-on { border-color: #6366f1; box-shadow: 0 0 0 1px #6366f1 inset; }
-.hotel-card-top { display: flex; gap: 6px; align-items: center; }
-.hotel-card-name { flex: 1; padding: 4px 6px; border: 1px solid var(--line); border-radius: 4px; font-size: 14px; font-weight: 600; }
-.hotel-card-price { font-weight: 700; font-size: 14px; white-space: nowrap; }
+.hotel-card.card-open { padding: 0 10px 10px; display: flex; flex-direction: column; gap: 6px; }
+.hotel-card-top { display: flex; gap: 10px; align-items: center; padding: 8px 10px; cursor: pointer; }
+.hotel-card-top:hover { background: var(--panel); }
+.hotel-card-chev { color: var(--muted); width: 12px; font-size: 12px; }
+.hotel-card-name-label { flex: 1; font-weight: 600; font-size: 14px; }
+.hotel-card-name { padding: 4px 6px; border: 1px solid var(--line); border-radius: 4px; font-size: 14px; font-weight: 600; }
+.hotel-card-price { font-weight: 700; font-size: 14px; white-space: nowrap; margin-left: auto; }
 .hotel-card-price .per-night { color: var(--muted); font-weight: 400; font-size: 12px; }
+.hotel-card-price-edit { display: flex; gap: 6px; align-items: center; font-size: 12px; }
 .hotel-card-note { padding: 4px 6px; border: 1px solid var(--line); border-radius: 4px; font-size: 12px; color: var(--muted); }
 .hotel-card-urls { display: flex; flex-direction: column; gap: 4px; }
 .hotel-card-url-row { display: flex; gap: 6px; align-items: center; font-size: 12px; }
