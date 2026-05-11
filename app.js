@@ -2238,30 +2238,66 @@ function renderHotelCompare() {
     });
     subnav.appendChild(tab);
   }
+  // "+ Add group" with an inline menu containing top-level and subgroup options.
+  const addWrap = document.createElement("div");
+  addWrap.className = "hotel-subnav-add-wrap";
   const addTab = document.createElement("button");
   addTab.type = "button";
   addTab.className = "hotel-subnav-add";
-  addTab.textContent = "+ Add group";
-  addTab.addEventListener("click", () => {
+  addTab.textContent = "+ Add group ▾";
+  const menu = document.createElement("div");
+  menu.className = "hotel-add-menu";
+  menu.hidden = true;
+  const optTop = document.createElement("button");
+  optTop.type = "button";
+  optTop.className = "hotel-add-menu-item";
+  optTop.textContent = "Add group";
+  optTop.addEventListener("click", () => {
     const g = createHotelGroup();
     activeHotelGroupId = g.id;
     save();
     renderHotelCompare();
   });
-  subnav.appendChild(addTab);
+  menu.appendChild(optTop);
+  if (activeTop) {
+    const optSub = document.createElement("button");
+    optSub.type = "button";
+    optSub.className = "hotel-add-menu-item";
+    optSub.textContent = `Add subgroup under "${activeTop.name || "group"}"`;
+    optSub.addEventListener("click", () => {
+      const g = createHotelGroup();
+      g.parentId = activeTop.id;
+      activeHotelGroupId = g.id;
+      save();
+      renderHotelCompare();
+    });
+    menu.appendChild(optSub);
+  }
+  addTab.addEventListener("click", (e) => {
+    e.stopPropagation();
+    menu.hidden = !menu.hidden;
+    if (!menu.hidden) {
+      const close = (ev) => {
+        if (!addWrap.contains(ev.target)) { menu.hidden = true; document.removeEventListener("click", close); }
+      };
+      setTimeout(() => document.addEventListener("click", close));
+    }
+  });
+  addWrap.appendChild(addTab);
+  addWrap.appendChild(menu);
+  subnav.appendChild(addWrap);
   const hotSlot = document.getElementById("compare-subnav-slot");
   if (hotSlot) { hotSlot.innerHTML = ""; hotSlot.appendChild(subnav); }
   else wrap.appendChild(subnav);
 
   // Sub-sub-nav for the active top group's children (if any) — also shown
   // when a child is active so the parent's siblings stay reachable.
+  // Sub-sub-nav: only render when the active top group already has subgroups.
   if (activeTop) {
     const children = state.hotelGroups.filter(g => g.parentId === activeTop.id);
-    if (children.length || true) {
+    if (children.length) {
       const subsub = document.createElement("div");
       subsub.className = "hotel-subsubnav";
-      // "All" pseudo-tab — selects the top group itself, showing every hotel
-      // in any descendant.
       const allTab = document.createElement("button");
       allTab.type = "button";
       allTab.className = "hotel-subsubnav-tab" + (activeGroup?.id === activeTop.id ? " active" : "");
@@ -2282,18 +2318,6 @@ function renderHotelCompare() {
         });
         subsub.appendChild(tab);
       }
-      const addSub = document.createElement("button");
-      addSub.type = "button";
-      addSub.className = "hotel-subnav-add";
-      addSub.textContent = "+ Add subgroup";
-      addSub.addEventListener("click", () => {
-        const g = createHotelGroup();
-        g.parentId = activeTop.id;
-        activeHotelGroupId = g.id;
-        save();
-        renderHotelCompare();
-      });
-      subsub.appendChild(addSub);
       if (hotSlot) hotSlot.appendChild(subsub);
       else wrap.appendChild(subsub);
     }
