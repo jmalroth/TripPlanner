@@ -222,11 +222,9 @@ button.smart:disabled { opacity: 0.6; cursor: progress; }
 .hotel-subsubnav-tab { background: transparent; color: var(--muted); border: none; padding: 6px 10px; font-size: 11px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
 .hotel-subsubnav-tab:hover { color: var(--text); }
 .hotel-subsubnav-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
-.hotel-subnav-add-wrap { position: relative; opacity: 0; pointer-events: none; transition: opacity 0.12s; }
-.hotel-subnav:hover .hotel-subnav-add-wrap, .hotel-subnav-add-wrap:focus-within, .hotel-subnav-add-wrap.menu-open { opacity: 1; pointer-events: auto; }
-.option-subnav-add { opacity: 0; pointer-events: none; transition: opacity 0.12s; }
-.option-subnav:hover .option-subnav-add, .option-subnav-add:focus, .option-subnav-add:hover { opacity: 1; pointer-events: auto; }
+.hotel-subnav-add-wrap { position: relative; }
 .hotel-add-menu { position: absolute; top: 100%; right: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); padding: 4px; display: flex; flex-direction: column; min-width: 220px; z-index: 10; }
+.hotel-subnav-add-wrap:hover .hotel-add-menu[hidden] { display: flex; }
 .hotel-add-menu-item { background: transparent; border: none; padding: 8px 10px; text-align: left; cursor: pointer; font-size: 13px; color: var(--text); border-radius: 4px; }
 .hotel-add-menu-item:hover { background: var(--panel-2); }
 .hotel-subnav-tab, .option-subnav-tab { background: transparent; color: var(--muted); border: none; border-radius: 0; padding: 10px 14px; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
