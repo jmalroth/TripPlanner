@@ -2421,6 +2421,30 @@ function renderHotelCard(h) {
     renderHotelCompare();
   });
   actions.appendChild(compareBtn);
+  // Move to a different group.
+  if (state.hotelGroups.length > 1) {
+    const moveSel = document.createElement("select");
+    moveSel.className = "hotel-card-move";
+    moveSel.title = "Move to group";
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = "Move to…";
+    moveSel.appendChild(placeholder);
+    for (const g of state.hotelGroups) {
+      if (g.id === h.groupId) continue;
+      const opt = document.createElement("option");
+      opt.value = g.id;
+      opt.textContent = g.name || "(unnamed)";
+      moveSel.appendChild(opt);
+    }
+    moveSel.addEventListener("change", () => {
+      if (!moveSel.value) return;
+      h.groupId = moveSel.value;
+      save();
+      renderHotelCompare();
+    });
+    actions.appendChild(moveSel);
+  }
   const del = document.createElement("button");
   del.type = "button";
   del.className = "ghost";
@@ -2667,7 +2691,7 @@ document.getElementById("compare-smart")?.addEventListener("click", async () => 
       if (data) {
         state.hotelCompare.push({
           id: uid(),
-          groupId: state.hotelGroups[state.hotelGroups.length - 1]?.id,
+          groupId: activeHotelGroupId || state.hotelGroups[0]?.id,
           ...data,
           sourceUrl: data.sourceUrl || data.url || null,
           websiteUrl: data.websiteUrl || data.website || null,
@@ -2690,8 +2714,15 @@ document.getElementById("compare-smart")?.addEventListener("click", async () => 
   const data = await smartParseHotelRemote(text, status);
   btn.disabled = false;
   if (!data) return;
-  state.hotelCompare.push({ id: uid(), ...data });
+  state.hotelCompare.push({
+    id: uid(),
+    groupId: activeHotelGroupId || state.hotelGroups[0]?.id,
+    ...data,
+    sourceUrl: data.sourceUrl || data.url || null,
+    websiteUrl: data.websiteUrl || data.website || null,
+  });
   save();
+  renderHotelCompare();
   status.textContent = `Added ${data.name || "hotel"} to comparison.`;
   status.className = "paste-status success";
   input.value = "";

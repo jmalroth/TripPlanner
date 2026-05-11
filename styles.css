@@ -209,8 +209,9 @@ button.smart:disabled { opacity: 0.6; cursor: progress; }
 .hotel-card-url-row .url-label { width: 50px; color: var(--muted); }
 .hotel-card-url-row .url-input { flex: 1; padding: 3px 5px; border: 1px solid var(--line); border-radius: 3px; font-size: 12px; }
 .hotel-card-url-row .url-open { color: #2563eb; font-size: 12px; }
-.hotel-card-actions { display: flex; gap: 6px; margin-top: 4px; }
+.hotel-card-actions { display: flex; gap: 6px; margin-top: 4px; align-items: center; flex-wrap: wrap; }
 .hotel-card-actions button { font-size: 12px; padding: 4px 8px; }
+.hotel-card-move { font-size: 12px; padding: 3px 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); }
 .add-hotel-group { margin-top: 4px; padding: 8px 12px; border: 1px dashed var(--line); border-radius: 6px; background: transparent; cursor: pointer; color: var(--muted); font-size: 13px; }
 .add-hotel-group:hover { color: var(--text); border-color: var(--text); }
 .subnav-slot { background: var(--panel); border-bottom: 1px solid var(--line); padding: 0 20px; }
