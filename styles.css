@@ -218,6 +218,10 @@ button.smart:disabled { opacity: 0.6; cursor: progress; }
 .subnav-slot:empty { display: none; }
 .hotel-subnav, .option-subnav { display: flex; gap: 0; flex-wrap: wrap; align-items: flex-end; margin: 0; }
 .subnav-slot .hotel-subnav, .subnav-slot .option-subnav { border-bottom: none; margin-bottom: 0; }
+.hotel-subsubnav { display: flex; gap: 0; flex-wrap: wrap; align-items: flex-end; border-top: 1px solid var(--line); background: var(--panel-2); padding: 0 6px; }
+.hotel-subsubnav-tab { background: transparent; color: var(--muted); border: none; padding: 6px 10px; font-size: 11px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.hotel-subsubnav-tab:hover { color: var(--text); }
+.hotel-subsubnav-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
 .hotel-subnav-tab, .option-subnav-tab { background: transparent; color: var(--muted); border: none; border-radius: 0; padding: 10px 14px; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
 .hotel-subnav-tab:hover, .option-subnav-tab:hover { color: var(--text); background: transparent; }
 .hotel-subnav-tab.active, .option-subnav-tab.active { color: var(--accent); border-bottom-color: var(--accent); background: transparent; font-weight: 600; }

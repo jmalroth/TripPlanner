@@ -2193,22 +2193,44 @@ const fmtHotelPrice = (n, ccy) => {
 
 let activeHotelGroupId = null;
 
+function hotelGroupTopAncestor(g) {
+  let cur = g;
+  while (cur && cur.parentId) cur = state.hotelGroups.find(x => x.id === cur.parentId);
+  return cur || null;
+}
+function hotelGroupDescendants(rootId) {
+  const out = new Set([rootId]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const g of state.hotelGroups) {
+      if (g.parentId && out.has(g.parentId) && !out.has(g.id)) { out.add(g.id); changed = true; }
+    }
+  }
+  return out;
+}
+
 function renderHotelCompare() {
   ensureHotelCompare();
   const wrap = document.getElementById("compare-table");
   if (!wrap) return;
   wrap.innerHTML = "";
 
-  // Sub-nav: one tab per group + "+ Add group". Selected group renders below.
-  if (!state.hotelGroups.find(g => g.id === activeHotelGroupId)) {
-    activeHotelGroupId = state.hotelGroups[0]?.id || null;
+  const topGroups = state.hotelGroups.filter(g => !g.parentId);
+  let activeGroup = state.hotelGroups.find(g => g.id === activeHotelGroupId);
+  if (!activeGroup) {
+    activeGroup = topGroups[0] || null;
+    activeHotelGroupId = activeGroup?.id || null;
   }
+  const activeTop = activeGroup ? hotelGroupTopAncestor(activeGroup) : null;
+
+  // Top-level sub-nav (one tab per top-level group).
   const subnav = document.createElement("div");
   subnav.className = "hotel-subnav";
-  for (const g of state.hotelGroups) {
+  for (const g of topGroups) {
     const tab = document.createElement("button");
     tab.type = "button";
-    tab.className = "hotel-subnav-tab" + (g.id === activeHotelGroupId ? " active" : "");
+    tab.className = "hotel-subnav-tab" + (g.id === activeTop?.id ? " active" : "");
     tab.textContent = g.name || "(unnamed)";
     tab.addEventListener("click", () => {
       activeHotelGroupId = g.id;
@@ -2231,7 +2253,55 @@ function renderHotelCompare() {
   if (hotSlot) { hotSlot.innerHTML = ""; hotSlot.appendChild(subnav); }
   else wrap.appendChild(subnav);
 
-  // Render only the active group.
+  // Sub-sub-nav for the active top group's children (if any) — also shown
+  // when a child is active so the parent's siblings stay reachable.
+  if (activeTop) {
+    const children = state.hotelGroups.filter(g => g.parentId === activeTop.id);
+    if (children.length || true) {
+      const subsub = document.createElement("div");
+      subsub.className = "hotel-subsubnav";
+      // "All" pseudo-tab — selects the top group itself, showing every hotel
+      // in any descendant.
+      const allTab = document.createElement("button");
+      allTab.type = "button";
+      allTab.className = "hotel-subsubnav-tab" + (activeGroup?.id === activeTop.id ? " active" : "");
+      allTab.textContent = "All";
+      allTab.addEventListener("click", () => {
+        activeHotelGroupId = activeTop.id;
+        renderHotelCompare();
+      });
+      subsub.appendChild(allTab);
+      for (const c of children) {
+        const tab = document.createElement("button");
+        tab.type = "button";
+        tab.className = "hotel-subsubnav-tab" + (c.id === activeGroup?.id ? " active" : "");
+        tab.textContent = c.name || "(unnamed)";
+        tab.addEventListener("click", () => {
+          activeHotelGroupId = c.id;
+          renderHotelCompare();
+        });
+        subsub.appendChild(tab);
+      }
+      const addSub = document.createElement("button");
+      addSub.type = "button";
+      addSub.className = "hotel-subnav-add";
+      addSub.textContent = "+ Add subgroup";
+      addSub.addEventListener("click", () => {
+        const g = createHotelGroup();
+        g.parentId = activeTop.id;
+        activeHotelGroupId = g.id;
+        save();
+        renderHotelCompare();
+      });
+      subsub.appendChild(addSub);
+      if (hotSlot) hotSlot.appendChild(subsub);
+      else wrap.appendChild(subsub);
+    }
+  }
+
+  // Render the active group's content. If the active group is a top-level
+  // group with children, include hotels in any descendant.
+  const targetIds = activeGroup ? hotelGroupDescendants(activeGroup.id) : new Set();
   for (const group of state.hotelGroups.filter(g => g.id === activeHotelGroupId)) {
     const groupEl = document.createElement("div");
     groupEl.className = "hotel-group";
@@ -2261,10 +2331,11 @@ function renderHotelCompare() {
     delGroupBtn.className = "ghost";
     delGroupBtn.textContent = "Delete group";
     delGroupBtn.addEventListener("click", () => {
-      const inGroup = state.hotelCompare.filter(h => h.groupId === group.id);
-      if (inGroup.length && !confirm(`Delete group "${group.name}" and its ${inGroup.length} hotel${inGroup.length === 1 ? "" : "s"}?`)) return;
-      state.hotelCompare = state.hotelCompare.filter(h => h.groupId !== group.id);
-      state.hotelGroups = state.hotelGroups.filter(g => g.id !== group.id);
+      const subtree = hotelGroupDescendants(group.id);
+      const inGroup = state.hotelCompare.filter(h => subtree.has(h.groupId));
+      if ((inGroup.length || subtree.size > 1) && !confirm(`Delete group "${group.name}"${subtree.size > 1 ? " and its subgroups" : ""}${inGroup.length ? ` (${inGroup.length} hotel${inGroup.length === 1 ? "" : "s"})` : ""}?`)) return;
+      state.hotelCompare = state.hotelCompare.filter(h => !subtree.has(h.groupId));
+      state.hotelGroups = state.hotelGroups.filter(g => !subtree.has(g.id));
       save();
       renderHotelCompare();
     });
@@ -2272,7 +2343,7 @@ function renderHotelCompare() {
     headRow.appendChild(headActions);
     groupEl.appendChild(headRow);
 
-    const hotelsInGroup = state.hotelCompare.filter(h => h.groupId === group.id);
+    const hotelsInGroup = state.hotelCompare.filter(h => targetIds.has(h.groupId));
 
     // Compact card row at the top of the group.
     const cardRow = document.createElement("div");
@@ -2434,7 +2505,12 @@ function renderHotelCard(h) {
       if (g.id === h.groupId) continue;
       const opt = document.createElement("option");
       opt.value = g.id;
-      opt.textContent = g.name || "(unnamed)";
+      if (g.parentId) {
+        const parent = state.hotelGroups.find(p => p.id === g.parentId);
+        opt.textContent = `${parent?.name || "?"} › ${g.name || "(unnamed)"}`;
+      } else {
+        opt.textContent = g.name || "(unnamed)";
+      }
       moveSel.appendChild(opt);
     }
     moveSel.addEventListener("change", () => {
