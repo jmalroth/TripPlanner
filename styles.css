@@ -223,7 +223,7 @@ button.smart:disabled { opacity: 0.6; cursor: progress; }
 .hotel-subsubnav-tab:hover { color: var(--text); }
 .hotel-subsubnav-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
 .hotel-subnav-add-wrap { position: relative; }
-.hotel-add-menu { position: absolute; top: 100%; right: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); padding: 4px; flex-direction: column; min-width: 220px; z-index: 10; display: none; }
+.hotel-add-menu { position: absolute; top: 100%; left: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); padding: 4px; flex-direction: column; min-width: 220px; z-index: 10; display: none; }
 .hotel-add-menu:not([hidden]) { display: flex; }
 .hotel-subnav-add-wrap:hover .hotel-add-menu { display: flex; }
 .hotel-add-menu-item { background: transparent; border: none; padding: 8px 10px; text-align: left; cursor: pointer; font-size: 13px; color: var(--text); border-radius: 4px; }
