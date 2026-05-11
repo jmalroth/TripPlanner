@@ -366,6 +366,7 @@ main {
   flex-wrap: wrap;
   margin-bottom: 8px;
 }
+.options-controls[hidden] { display: none; }
 
 .paste-block {
   border: 1px solid var(--line);
@@ -564,6 +565,15 @@ main {
   flex-direction: column;
   gap: 12px;
 }
+.option-group { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.option-group-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.option-group-check { width: 18px; color: #059669; font-weight: 700; font-size: 18px; }
+.option-group-name { flex: 0 1 240px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; font-size: 15px; font-weight: 600; }
+.option-group-date { padding: 5px 6px; border: 1px solid var(--line); border-radius: 4px; font-size: 13px; }
+.option-group-dash { color: var(--muted); }
+.option-group-actions { margin-left: auto; display: inline-flex; gap: 8px; }
+.add-option-group { margin: 4px 0 16px; padding: 8px 12px; border: 1px dashed var(--line); border-radius: 6px; background: transparent; cursor: pointer; color: var(--muted); font-size: 13px; }
+.add-option-group:hover { color: var(--text); border-color: var(--text); }
 
 .option-head {
   display: flex;

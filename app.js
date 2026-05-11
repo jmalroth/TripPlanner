@@ -1554,11 +1554,14 @@ function renderLineItemForm() {
       input.className = "or-input";
       input.placeholder = `$ or % (e.g. 200 or 25%)`;
       input.value = formOverrides[g.id] || "";
+      // Track value as typed (so Save uses the current text) but only
+      // refresh the hint display when the field loses focus / commits.
       input.addEventListener("input", () => {
         if (input.value === "") delete formOverrides[g.id];
         else formOverrides[g.id] = input.value;
-        updateLineItemFormBreakdown();
       });
+      input.addEventListener("change", updateLineItemFormBreakdown);
+      input.addEventListener("blur", updateLineItemFormBreakdown);
       const def = document.createElement("span");
       def.className = "or-default";
       row.appendChild(lab);
@@ -2015,7 +2018,8 @@ function openEventDialog(id, optionId) {
     form.elements.id.value = "";
     form.elements.optionId.value = optionId || "";
     form.elements.lane.value = "flights";
-    const defaultStart = optionId ? (state.optionRangeStart || state.start) : state.start;
+    const optGroup = opt ? getOptionGroupForOption(opt) : null;
+    const defaultStart = optionId ? (optGroup?.start || state.optionRangeStart || state.start) : state.start;
     form.elements.start.value = defaultStart || "";
     form.elements.end.value = defaultStart || "";
     buildColorGrid(optionId ? "indigo" : "emerald");
@@ -3463,21 +3467,65 @@ function getOptionRange() {
   };
 }
 
+// Each option belongs to a group; the group carries the date range so users
+// can compare several options for "last week" while staging a different set
+// for "first week" under a separate header.
+function ensureOptionGroups() {
+  if (!Array.isArray(state.optionGroups)) state.optionGroups = [];
+  if (!Array.isArray(state.options)) state.options = [];
+  const orphans = state.options.filter(o => !o.groupId);
+  if (orphans.length || (state.options.length === 0 && state.optionGroups.length === 0)) {
+    let g = state.optionGroups[0];
+    if (!g) {
+      const def = defaultOptionRange();
+      g = {
+        id: uid(),
+        name: "Options",
+        start: state.optionRangeStart || def?.start || state.start,
+        end:   state.optionRangeEnd   || def?.end   || state.end,
+      };
+      state.optionGroups.push(g);
+    }
+    orphans.forEach(o => { o.groupId = g.id; });
+  }
+}
+
+function getOptionGroupForOption(opt) {
+  if (!opt || !opt.groupId) return null;
+  return state.optionGroups?.find(g => g.id === opt.groupId) || null;
+}
+
+function groupRange(group) {
+  if (!group) return null;
+  const def = defaultOptionRange();
+  return { start: group.start || def?.start || state.start, end: group.end || def?.end || state.end };
+}
+
+function createOptionGroup(name) {
+  ensureOptionGroups();
+  const def = defaultOptionRange();
+  const taken = new Set(state.optionGroups.map(g => g.name));
+  let n = 1;
+  while (taken.has(`Group ${n}`)) n++;
+  const g = {
+    id: uid(),
+    name: name || `Group ${n}`,
+    start: def?.start || state.start,
+    end: def?.end || state.end,
+  };
+  state.optionGroups.push(g);
+  return g;
+}
+
 function renderOptions() {
+  ensureOptionGroups();
   // Natural-numeric sort by name so renames stay in number order
   // ("Option 2" before "Option 10", "1 - cheap" before "2 - flex").
   state.options.sort((a, b) =>
     (a.name || "").localeCompare(b.name || "", undefined, { numeric: true, sensitivity: "base" }));
 
-  const range = getOptionRange();
   const list = document.getElementById("options-list");
   list.innerHTML = "";
-
-  // Sync the range inputs.
-  if (range) {
-    document.getElementById("option-range-start").value = range.start;
-    document.getElementById("option-range-end").value = range.end;
-  }
 
   // Refresh the paste target dropdown — Options tab can only target an
   // existing option, or "+ New option" which creates one at parse time.
@@ -3490,20 +3538,12 @@ function renderOptions() {
       target.appendChild(new Option(opt.name, opt.id));
     }
     target.appendChild(new Option("+ New option", "__new__"));
-    // Default to "+ New option" so a fresh paste creates a new option
-    // unless the user explicitly picked an existing one earlier.
     const stillExists = state.options.find(o => o.id === prev);
     target.value = stillExists ? prev : "__new__";
   }
 
-  if (!range) {
+  if (!state.start || !state.end) {
     list.appendChild(el("div", "empty-state", "Set your trip dates first."));
-    return;
-  }
-
-  if (state.options.length === 0) {
-    list.appendChild(el("div", "empty-state",
-      `No options yet. Click "+ New option" to stage an alternative for ${fmtShort(parseDay(range.start))} – ${fmtShort(parseDay(range.end))}.`));
     return;
   }
 
@@ -3511,7 +3551,70 @@ function renderOptions() {
   const tzAware = !!state.tzAware;
   const dayTzMap = computeDayTzMap(state.start, state.end, state.events, homeTz, tzAware);
 
-  for (const opt of state.options) {
+  for (const group of state.optionGroups) {
+    const groupEl = el("div", "option-group");
+    const optsInGroup = state.options.filter(o => o.groupId === group.id);
+    const groupApplied = optsInGroup.some(o => isOptionApplied(o.id));
+
+    // Group header
+    const gHead = el("div", "option-group-head");
+    const checkEl = el("span", "option-group-check", groupApplied ? "✓" : "");
+    gHead.appendChild(checkEl);
+    const gName = el("input", "option-group-name");
+    gName.type = "text";
+    gName.value = group.name;
+    gName.placeholder = "Group name";
+    gName.addEventListener("input", () => { group.name = gName.value; save(); });
+    gHead.appendChild(gName);
+
+    const gStart = el("input", "option-group-date");
+    gStart.type = "date";
+    gStart.value = group.start || "";
+    gStart.addEventListener("change", () => {
+      group.start = gStart.value || null;
+      save();
+      renderOptions();
+    });
+    gHead.appendChild(gStart);
+    gHead.appendChild(el("span", "option-group-dash", "–"));
+    const gEnd = el("input", "option-group-date");
+    gEnd.type = "date";
+    gEnd.value = group.end || "";
+    gEnd.addEventListener("change", () => {
+      group.end = gEnd.value || null;
+      save();
+      renderOptions();
+    });
+    gHead.appendChild(gEnd);
+
+    const gActions = el("div", "option-group-actions");
+    const gAddOpt = el("button", null, "+ Add option");
+    gAddOpt.type = "button";
+    gAddOpt.addEventListener("click", () => { createOption(null, group.id); renderApp(); });
+    gActions.appendChild(gAddOpt);
+    const gDel = el("button", "ghost", "Delete group");
+    gDel.type = "button";
+    gDel.addEventListener("click", () => {
+      const inGroup = state.options.filter(o => o.groupId === group.id);
+      if (inGroup.length && !confirm(`Delete group "${group.name}" and its ${inGroup.length} option${inGroup.length === 1 ? "" : "s"}?`)) return;
+      state.options = state.options.filter(o => o.groupId !== group.id);
+      state.optionGroups = state.optionGroups.filter(g => g.id !== group.id);
+      save();
+      renderApp();
+    });
+    gActions.appendChild(gDel);
+    gHead.appendChild(gActions);
+    groupEl.appendChild(gHead);
+
+    const range = groupRange(group);
+    if (optsInGroup.length === 0) {
+      groupEl.appendChild(el("div", "empty-state",
+        `No options yet. Click "+ Add option" to stage an alternative for ${fmtShort(parseDay(range.start))} – ${fmtShort(parseDay(range.end))}.`));
+      list.appendChild(groupEl);
+      continue;
+    }
+
+    for (const opt of optsInGroup) {
     const card = el("div", "option-card");
 
     // Head: name input + price + actions
@@ -3623,8 +3726,22 @@ function renderOptions() {
     }
     card.appendChild(stats);
 
-    list.appendChild(card);
+    groupEl.appendChild(card);
+    }
+
+    list.appendChild(groupEl);
   }
+
+  // "+ Add option group" — start a fresh subheader for another set of options.
+  const addGroupBtn = el("button", "add-option-group", "+ Add option group");
+  addGroupBtn.type = "button";
+  addGroupBtn.addEventListener("click", () => {
+    const g = createOptionGroup();
+    createOption(null, g.id);
+    save();
+    renderApp();
+  });
+  list.appendChild(addGroupBtn);
 
   renderComparison();
 }
@@ -3837,19 +3954,24 @@ document.getElementById("pricing-add-split-group")?.addEventListener("click", ()
   renderPricing();
 });
 
-function createOption(name) {
-  // Pick the next available "Option N" number so deleting an option in the
-  // middle doesn't cause the next "+ New option" to collide with an existing
-  // name (e.g. Option 1, Option 3 → next is Option 2 if free, otherwise 4).
+function createOption(name, groupId) {
+  ensureOptionGroups();
   function nextDefaultName() {
     const taken = new Set(state.options.map(o => o.name));
     let n = 1;
     while (taken.has(`Option ${n}`)) n++;
     return `Option ${n}`;
   }
+  // Default to the last group so a fresh "+ Add option" lands where the
+  // user is currently working.
+  if (!groupId) {
+    if (!state.optionGroups.length) createOptionGroup();
+    groupId = state.optionGroups[state.optionGroups.length - 1].id;
+  }
   const opt = {
     id: uid(),
     name: name || nextDefaultName(),
+    groupId,
     events: [],
   };
   state.options.push(opt);
@@ -4264,6 +4386,7 @@ async function bootstrap() {
 
   load();
   if (!state.options) state.options = [];
+  ensureOptionGroups();
   if (!state.activeView) state.activeView = "main";
   if (!state.shrunkDays) state.shrunkDays = [];
   delete state.expandedDays;
