@@ -943,8 +943,12 @@ const LANE_ORDER = ["flights", "lodging", "rental", "activities", "location"];
 function fmtMoney(n) {
   if (typeof n !== "number" || isNaN(n)) return "$0";
   const sign = n < 0 ? "-" : "";
-  const rounded = String(Math.round(Math.abs(n)));
-  return sign + "$" + rounded.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  // Round to 2 decimals, then drop trailing zeros (and the dot if whole).
+  const abs = Math.round(Math.abs(n) * 100) / 100;
+  const [intPart, decPart] = abs.toFixed(2).split(".");
+  const withCommas = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  const trimmedDec = decPart.replace(/0+$/, "");
+  return sign + "$" + withCommas + (trimmedDec ? "." + trimmedDec : "");
 }
 
 function ensureLineItems() {
@@ -1225,16 +1229,10 @@ function editLineItem(id) {
   formTotalInput = String(lineItemTotal(li) || "");
   // Load overrides.
   for (const k of Object.keys(formOverrides)) delete formOverrides[k];
-  for (const k of Object.keys(formOverrideModes)) delete formOverrideModes[k];
   if (li.overrides) {
     for (const [k, v] of Object.entries(li.overrides)) {
-      if (v && typeof v === "object" && "pct" in v) {
-        formOverrides[k] = String(v.pct);
-        formOverrideModes[k] = "%";
-      } else {
-        formOverrides[k] = String(v);
-        formOverrideModes[k] = "$";
-      }
+      if (v && typeof v === "object" && "pct" in v) formOverrides[k] = `${v.pct}%`;
+      else formOverrides[k] = String(v);
     }
   }
   const addBtn = document.getElementById("pricing-add-btn");
@@ -1251,7 +1249,6 @@ function cancelLineItemEdit() {
   document.getElementById("pricing-label").value = "";
   formTotalInput = "";
   for (const k of Object.keys(formOverrides)) delete formOverrides[k];
-  for (const k of Object.keys(formOverrideModes)) delete formOverrideModes[k];
   const addBtn = document.getElementById("pricing-add-btn");
   if (addBtn) addBtn.textContent = "+ Add line item";
   const cancelBtn = document.getElementById("pricing-cancel-edit");
@@ -1410,7 +1407,22 @@ function lineItemOthersTotal(li) {
 // Working state for the add/edit line-item form.
 let formTotalInput = "";
 const formOverrides = {}; // { groupId: input string }
-const formOverrideModes = {}; // { groupId: "$" | "%" }
+
+// Parse a single override input. Trailing % → percent-of-total; otherwise
+// a flat dollar amount. Returns { kind: "pct" | "amt", value } or null.
+function parseOverrideInput(raw) {
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  if (/%\s*$/.test(s)) {
+    const num = parseAmount(s.replace(/%\s*$/, ""));
+    if (isNaN(num)) return null;
+    return { kind: "pct", value: num };
+  }
+  const num = parseAmount(s);
+  if (isNaN(num)) return null;
+  return { kind: "amt", value: num };
+}
 
 function refreshSplitDisplay() {
   // Update the % spans + warn + downstream pricing without rebuilding rows.
@@ -1537,37 +1549,19 @@ function renderLineItemForm() {
       const lab = document.createElement("span");
       lab.className = "or-label";
       lab.textContent = g.name;
-      if (!formOverrideModes[g.id]) formOverrideModes[g.id] = "$";
-      const modeBtn = document.createElement("button");
-      modeBtn.type = "button";
-      modeBtn.className = "or-mode";
-      modeBtn.textContent = formOverrideModes[g.id];
-      modeBtn.title = "Toggle override mode ($ amount vs % of total)";
       const input = document.createElement("input");
       input.type = "text";
       input.className = "or-input";
-      const setPlaceholder = () => {
-        input.placeholder = formOverrideModes[g.id] === "%"
-          ? `(default ${(g.share * 100).toFixed(0)})`
-          : `(default ${(g.share * 100).toFixed(0)}%)`;
-      };
-      setPlaceholder();
+      input.placeholder = `$ or % (e.g. 200 or 25%)`;
       input.value = formOverrides[g.id] || "";
       input.addEventListener("input", () => {
         if (input.value === "") delete formOverrides[g.id];
         else formOverrides[g.id] = input.value;
         updateLineItemFormBreakdown();
       });
-      modeBtn.addEventListener("click", () => {
-        formOverrideModes[g.id] = formOverrideModes[g.id] === "%" ? "$" : "%";
-        modeBtn.textContent = formOverrideModes[g.id];
-        setPlaceholder();
-        updateLineItemFormBreakdown();
-      });
       const def = document.createElement("span");
       def.className = "or-default";
       row.appendChild(lab);
-      row.appendChild(modeBtn);
       row.appendChild(input);
       row.appendChild(def);
       orContainer.appendChild(row);
@@ -1581,16 +1575,26 @@ function updateLineItemFormBreakdown() {
   // Build an overrides map matching the saved shape so we can reuse the helper.
   const overrides = {};
   for (const g of state.priceSplit.groups) {
-    const raw = formOverrides[g.id];
-    if (raw == null || raw === "") continue;
-    const v = parseAmount(raw);
-    if (isNaN(v)) continue;
-    overrides[g.id] = formOverrideModes[g.id] === "%" ? { pct: v } : v;
+    const parsed = parseOverrideInput(formOverrides[g.id]);
+    if (!parsed) continue;
+    overrides[g.id] = parsed.kind === "pct" ? { pct: parsed.value } : parsed.value;
   }
   const { amounts } = splitWithOverrides(total, overrides, state.priceSplit.groups);
   const out = state.priceSplit.groups.map(g => `${g.name}: ${fmtMoney(amounts[g.id] || 0)}`);
   const breakdown = document.getElementById("pricing-default-breakdown");
   if (breakdown) breakdown.textContent = out.join(" · ");
+  // Normalize shares so defaults reflect actual proportions even if shares
+  // weren't recomputed in state.
+  const shareSum = state.priceSplit.groups.reduce((s, g) => s + (g.share || 0), 0) || 1;
+  const defaultAmt = (g) => total * ((g.share || 0) / shareSum);
+  // Hint block inside the override panel: total + default split.
+  const hint = document.getElementById("pricing-overrides-hint");
+  if (hint) {
+    const defaults = state.priceSplit.groups
+      .map(g => `${g.name} ${fmtMoney(defaultAmt(g))}`)
+      .join(" · ");
+    hint.innerHTML = `<span class="ph-total">Total ${fmtMoney(total)}</span> · Defaults: ${defaults}`;
+  }
   // Update each row's computed-amount display.
   const rows = document.querySelectorAll("#pricing-overrides-rows .pricing-override-row");
   rows.forEach((row, idx) => {
@@ -1599,7 +1603,11 @@ function updateLineItemFormBreakdown() {
     const def = row.querySelector(".or-default");
     if (!def) return;
     const isOverridden = g.id in overrides;
-    def.textContent = `= ${fmtMoney(amounts[g.id] || 0)}` + (isOverridden ? "" : " (remainder)");
+    if (isOverridden) {
+      def.textContent = `= ${fmtMoney(amounts[g.id] || 0)} (default ${fmtMoney(defaultAmt(g))})`;
+    } else {
+      def.textContent = `= ${fmtMoney(amounts[g.id] || 0)} (remainder)`;
+    }
   });
 }
 
@@ -1615,10 +1623,9 @@ function addPricingLineItem() {
   // Snapshot overrides into a plain {groupId: amount} object (parsed numbers).
   const overrides = {};
   for (const [gid, raw] of Object.entries(formOverrides)) {
-    if (raw == null || raw === "") continue;
-    const v = parseAmount(raw);
-    if (isNaN(v)) continue;
-    overrides[gid] = formOverrideModes[gid] === "%" ? { pct: v } : v;
+    const parsed = parseOverrideInput(raw);
+    if (!parsed) continue;
+    overrides[gid] = parsed.kind === "pct" ? { pct: parsed.value } : parsed.value;
   }
   if (editingLineItemId) {
     const li = state.lineItems.find(x => x.id === editingLineItemId);
@@ -1648,7 +1655,6 @@ function addPricingLineItem() {
   labelInput.value = "";
   formTotalInput = "";
   for (const k of Object.keys(formOverrides)) delete formOverrides[k];
-  for (const k of Object.keys(formOverrideModes)) delete formOverrideModes[k];
   save();
   renderPricing();
 }

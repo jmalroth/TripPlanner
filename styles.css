@@ -1023,12 +1023,12 @@ main {
 .pricing-add-row label input { flex: 1; padding: 5px 8px; border: 1px solid var(--line); border-radius: 4px; font-size: 14px; }
 .pricing-overrides { font-size: 13px; padding: 8px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
 .pricing-overrides summary { cursor: pointer; color: var(--muted); }
+.pricing-overrides-hint { margin-top: 8px; padding: 6px 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; font-size: 12px; color: var(--muted); }
+.pricing-overrides-hint .ph-total { font-weight: 600; color: var(--text); }
 .pricing-overrides-rows { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
 .pricing-override-row { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .pricing-override-row .or-label { width: 140px; }
-.pricing-override-row .or-mode { width: 28px; padding: 4px 0; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); cursor: pointer; font-weight: 600; font-size: 13px; }
-.pricing-override-row .or-mode:hover { background: var(--bg); }
-.pricing-override-row .or-input { width: 100px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 4px; }
+.pricing-override-row .or-input { width: 140px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 4px; }
 .pricing-override-row .or-default { color: var(--muted); font-size: 12px; }
 .pricing-add-form > input[type="text"] { padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; font-size: 14px; }
 .pricing-hint { font-size: 12px; color: var(--muted); }
