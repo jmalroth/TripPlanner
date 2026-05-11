@@ -2418,11 +2418,11 @@ function renderHotelCard(h) {
   top.appendChild(nameLabel);
   const priceWrap = document.createElement("span");
   priceWrap.className = "hotel-card-price";
-  priceWrap.textContent = fmtHotelPrice(h.pricePerNight, h.currency);
-  if (h.pricePerNight != null) {
+  priceWrap.textContent = fmtHotelPrice(h.totalPrice, h.currency);
+  if (h.totalPrice != null) {
     const per = document.createElement("span");
     per.className = "per-night";
-    per.textContent = "/night";
+    per.textContent = "total";
     priceWrap.appendChild(per);
   }
   top.appendChild(priceWrap);
@@ -2443,24 +2443,32 @@ function renderHotelCard(h) {
   nameInput.addEventListener("input", () => { h.name = nameInput.value; save(); });
   card.appendChild(nameInput);
 
-  const priceEdit = document.createElement("div");
-  priceEdit.className = "hotel-card-price-edit";
-  const priceLbl = document.createElement("span");
-  priceLbl.className = "url-label";
-  priceLbl.textContent = "$ / night";
-  priceEdit.appendChild(priceLbl);
-  const priceInput = document.createElement("input");
-  priceInput.type = "text";
-  priceInput.inputMode = "decimal";
-  priceInput.className = "url-input";
-  priceInput.value = h.pricePerNight != null ? String(h.pricePerNight) : "";
-  priceInput.addEventListener("input", () => {
-    const v = priceInput.value.replace(/[^0-9.]/g, "");
-    h.pricePerNight = v === "" ? null : Number(v);
-    save();
-  });
-  priceEdit.appendChild(priceInput);
-  card.appendChild(priceEdit);
+  const makeField = (label, key, parser) => {
+    const row = document.createElement("div");
+    row.className = "hotel-card-price-edit";
+    const lbl = document.createElement("span");
+    lbl.className = "url-label";
+    lbl.textContent = label;
+    row.appendChild(lbl);
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "url-input";
+    input.value = h[key] != null ? String(h[key]) : "";
+    input.addEventListener("input", () => {
+      h[key] = parser(input.value);
+      save();
+    });
+    input.addEventListener("change", renderHotelCompare);
+    row.appendChild(input);
+    return row;
+  };
+  const num = v => { const s = v.replace(/[^0-9.]/g, ""); return s === "" ? null : Number(s); };
+  const int = v => { const s = v.replace(/[^0-9]/g, ""); return s === "" ? null : parseInt(s, 10); };
+  const str = v => v.trim() || null;
+  card.appendChild(makeField("$ / night", "pricePerNight", num));
+  card.appendChild(makeField("Total $", "totalPrice", num));
+  card.appendChild(makeField("# rooms", "roomCount", int));
+  card.appendChild(makeField("Room type", "roomType", str));
 
   // Comment line (single inline note, separate from the multi-author comments table)
   const noteInput = document.createElement("input");
@@ -2569,6 +2577,8 @@ function renderHotelTable(hotels) {
     ["Nights",       h => h.nights != null ? h.nights : "—"],
     ["Per night",    h => fmtPrice(h.pricePerNight, h.currency)],
     ["Total",        h => fmtPrice(h.totalPrice, h.currency)],
+    ["# rooms",      h => h.roomCount != null ? h.roomCount : "—"],
+    ["Room type",    h => h.roomType || "—"],
     ["Neighborhood", h => h.neighborhood || "—"],
     ["Listed rating",h => h.rating || "—"],
     ["Cancellation", h => h.cancellation || "—"],
