@@ -2227,7 +2227,9 @@ function renderHotelCompare() {
     renderHotelCompare();
   });
   subnav.appendChild(addTab);
-  wrap.appendChild(subnav);
+  const hotSlot = document.getElementById("compare-subnav-slot");
+  if (hotSlot) { hotSlot.innerHTML = ""; hotSlot.appendChild(subnav); }
+  else wrap.appendChild(subnav);
 
   // Render only the active group.
   for (const group of state.hotelGroups.filter(g => g.id === activeHotelGroupId)) {
@@ -3821,7 +3823,9 @@ function renderOptions() {
     renderApp();
   });
   subnav.appendChild(addTab);
-  list.appendChild(subnav);
+  const optSlot = document.getElementById("options-subnav-slot");
+  if (optSlot) { optSlot.innerHTML = ""; optSlot.appendChild(subnav); }
+  else list.appendChild(subnav);
 
   // Refresh the paste target dropdown — Options tab can only target an
   // existing option, or "+ New option" which creates one at parse time.

@@ -213,7 +213,10 @@ button.smart:disabled { opacity: 0.6; cursor: progress; }
 .hotel-card-actions button { font-size: 12px; padding: 4px 8px; }
 .add-hotel-group { margin-top: 4px; padding: 8px 12px; border: 1px dashed var(--line); border-radius: 6px; background: transparent; cursor: pointer; color: var(--muted); font-size: 13px; }
 .add-hotel-group:hover { color: var(--text); border-color: var(--text); }
-.hotel-subnav, .option-subnav { display: flex; gap: 0; flex-wrap: wrap; border-bottom: 1px solid var(--line); margin-bottom: 16px; align-items: flex-end; }
+.subnav-slot { background: var(--panel); border-bottom: 1px solid var(--line); padding: 0 20px; }
+.subnav-slot:empty { display: none; }
+.hotel-subnav, .option-subnav { display: flex; gap: 0; flex-wrap: wrap; align-items: flex-end; margin: 0; }
+.subnav-slot .hotel-subnav, .subnav-slot .option-subnav { border-bottom: none; margin-bottom: 0; }
 .hotel-subnav-tab, .option-subnav-tab { background: transparent; color: var(--muted); border: none; border-radius: 0; padding: 10px 14px; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
 .hotel-subnav-tab:hover, .option-subnav-tab:hover { color: var(--text); background: transparent; }
 .hotel-subnav-tab.active, .option-subnav-tab.active { color: var(--accent); border-bottom-color: var(--accent); background: transparent; font-weight: 600; }
