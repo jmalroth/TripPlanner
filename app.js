@@ -4175,6 +4175,7 @@ function renderApp() {
     b.classList.toggle("active", b.dataset.tab === state.activeView);
   });
   document.getElementById("tab-main").hidden = state.activeView !== "main";
+  document.getElementById("tab-todo").hidden = state.activeView !== "todo";
   document.getElementById("tab-pricing").hidden = !pricingAllowed || state.activeView !== "pricing";
   document.getElementById("tab-options").hidden = state.activeView !== "options";
   document.getElementById("tab-compare").hidden = state.activeView !== "compare";
@@ -4182,6 +4183,7 @@ function renderApp() {
   updateSyncIndicator();
 
   if (state.activeView === "main") render();
+  else if (state.activeView === "todo") renderTodoList();
   else if (state.activeView === "pricing") renderPricing();
   else if (state.activeView === "compare") renderHotelCompare();
   else renderOptions();

@@ -31,6 +31,7 @@
 
   <nav class="tabs">
     <button class="tab-btn" data-tab="main">My itinerary</button>
+    <button class="tab-btn" data-tab="todo">To do</button>
     <button class="tab-btn" data-tab="pricing">Pricing</button>
     <button class="tab-btn" data-tab="options">Itinerary options</button>
     <button class="tab-btn" data-tab="compare">Compare hotels</button>
@@ -52,16 +53,6 @@
         </div>
         <div id="overview" class="timeline overview"></div>
       </section>
-
-      <details class="panel todo-section" id="todo-panel" hidden open>
-        <summary class="panel-head">
-          <h2>To do — still need to book</h2>
-        </summary>
-        <ul id="todo-list" class="todo-list"></ul>
-        <form id="todo-add-form" class="todo-add-form">
-          <input id="todo-add-input" type="text" placeholder="+ Add to-do item" autocomplete="off" />
-        </form>
-      </details>
 
       <section class="panel">
         <div class="panel-head">
@@ -147,6 +138,20 @@
         </div>
         <div id="pricing-summary" class="pricing-summary"></div>
         <div id="pricing-line-items" class="pricing-line-items"></div>
+      </section>
+    </main>
+  </div>
+
+  <div class="tab-panel" id="tab-todo" hidden>
+    <main>
+      <section class="panel todo-section" id="todo-panel">
+        <div class="panel-head">
+          <h2>To do — still need to book</h2>
+        </div>
+        <ul id="todo-list" class="todo-list"></ul>
+        <form id="todo-add-form" class="todo-add-form">
+          <input id="todo-add-input" type="text" placeholder="+ Add to-do item" autocomplete="off" />
+        </form>
       </section>
     </main>
   </div>
