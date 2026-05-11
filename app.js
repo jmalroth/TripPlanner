@@ -2191,14 +2191,46 @@ const fmtHotelPrice = (n, ccy) => {
   return `${sym}${Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
 };
 
+let activeHotelGroupId = null;
+
 function renderHotelCompare() {
   ensureHotelCompare();
   const wrap = document.getElementById("compare-table");
   if (!wrap) return;
   wrap.innerHTML = "";
 
-  // For each group: header + a horizontal row of compact hotel cards.
-  for (const group of state.hotelGroups) {
+  // Sub-nav: one tab per group + "+ Add group". Selected group renders below.
+  if (!state.hotelGroups.find(g => g.id === activeHotelGroupId)) {
+    activeHotelGroupId = state.hotelGroups[0]?.id || null;
+  }
+  const subnav = document.createElement("div");
+  subnav.className = "hotel-subnav";
+  for (const g of state.hotelGroups) {
+    const tab = document.createElement("button");
+    tab.type = "button";
+    tab.className = "hotel-subnav-tab" + (g.id === activeHotelGroupId ? " active" : "");
+    tab.textContent = g.name || "(unnamed)";
+    tab.addEventListener("click", () => {
+      activeHotelGroupId = g.id;
+      renderHotelCompare();
+    });
+    subnav.appendChild(tab);
+  }
+  const addTab = document.createElement("button");
+  addTab.type = "button";
+  addTab.className = "hotel-subnav-add";
+  addTab.textContent = "+ Add group";
+  addTab.addEventListener("click", () => {
+    const g = createHotelGroup();
+    activeHotelGroupId = g.id;
+    save();
+    renderHotelCompare();
+  });
+  subnav.appendChild(addTab);
+  wrap.appendChild(subnav);
+
+  // Render only the active group.
+  for (const group of state.hotelGroups.filter(g => g.id === activeHotelGroupId)) {
     const groupEl = document.createElement("div");
     groupEl.className = "hotel-group";
 
@@ -2262,17 +2294,12 @@ function renderHotelCompare() {
     wrap.appendChild(groupEl);
   }
 
-  // "+ Add hotel group" button.
-  const addGroupBtn = document.createElement("button");
-  addGroupBtn.type = "button";
-  addGroupBtn.className = "add-hotel-group";
-  addGroupBtn.textContent = "+ Add hotel group";
-  addGroupBtn.addEventListener("click", () => {
-    createHotelGroup();
-    save();
-    renderHotelCompare();
-  });
-  wrap.appendChild(addGroupBtn);
+  if (!state.hotelGroups.length) {
+    const empty = document.createElement("div");
+    empty.className = "compare-empty";
+    empty.textContent = "No hotel groups yet — click + Add group above.";
+    wrap.appendChild(empty);
+  }
 }
 
 function renderHotelCard(h) {
@@ -3752,6 +3779,8 @@ function createOptionGroup(name) {
   return g;
 }
 
+let activeOptionGroupId = null;
+
 function renderOptions() {
   ensureOptionGroups();
   // Natural-numeric sort by name so renames stay in number order
@@ -3761,6 +3790,38 @@ function renderOptions() {
 
   const list = document.getElementById("options-list");
   list.innerHTML = "";
+
+  // Sub-nav across groups; selected group renders below.
+  if (!state.optionGroups.find(g => g.id === activeOptionGroupId)) {
+    activeOptionGroupId = state.optionGroups[0]?.id || null;
+  }
+  const subnav = document.createElement("div");
+  subnav.className = "option-subnav";
+  for (const g of state.optionGroups) {
+    const tab = document.createElement("button");
+    tab.type = "button";
+    const applied = state.options.some(o => o.groupId === g.id && isOptionApplied(o.id));
+    tab.className = "option-subnav-tab" + (g.id === activeOptionGroupId ? " active" : "");
+    tab.textContent = (applied ? "✓ " : "") + (g.name || "(unnamed)");
+    tab.addEventListener("click", () => {
+      activeOptionGroupId = g.id;
+      renderOptions();
+    });
+    subnav.appendChild(tab);
+  }
+  const addTab = document.createElement("button");
+  addTab.type = "button";
+  addTab.className = "option-subnav-add";
+  addTab.textContent = "+ Add group";
+  addTab.addEventListener("click", () => {
+    const g = createOptionGroup();
+    activeOptionGroupId = g.id;
+    createOption(null, g.id);
+    save();
+    renderApp();
+  });
+  subnav.appendChild(addTab);
+  list.appendChild(subnav);
 
   // Refresh the paste target dropdown — Options tab can only target an
   // existing option, or "+ New option" which creates one at parse time.
@@ -3786,7 +3847,7 @@ function renderOptions() {
   const tzAware = !!state.tzAware;
   const dayTzMap = computeDayTzMap(state.start, state.end, state.events, homeTz, tzAware);
 
-  for (const group of state.optionGroups) {
+  for (const group of state.optionGroups.filter(g => g.id === activeOptionGroupId)) {
     const groupEl = el("div", "option-group");
     const optsInGroup = state.options.filter(o => o.groupId === group.id);
     const groupApplied = optsInGroup.some(o => isOptionApplied(o.id));
@@ -3966,17 +4027,6 @@ function renderOptions() {
 
     list.appendChild(groupEl);
   }
-
-  // "+ Add option group" — start a fresh subheader for another set of options.
-  const addGroupBtn = el("button", "add-option-group", "+ Add option group");
-  addGroupBtn.type = "button";
-  addGroupBtn.addEventListener("click", () => {
-    const g = createOptionGroup();
-    createOption(null, g.id);
-    save();
-    renderApp();
-  });
-  list.appendChild(addGroupBtn);
 
   renderComparison();
 }
