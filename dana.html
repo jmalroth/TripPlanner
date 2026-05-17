@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="robots" content="noindex, nofollow" />
+<title>Dana's trips</title>
+<link rel="stylesheet" href="styles.css" />
+<style>
+  .wrap { max-width: 980px; margin: 0 auto; padding: 24px 20px; }
+  .head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+  .head h1 { margin: 0; font-size: 22px; }
+  .head .sub { color: var(--muted); font-size: 13px; }
+  .head-actions { display: flex; gap: 8px; }
+  .head-actions button { background: transparent; color: var(--muted); border: 1px solid var(--line); padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .head-actions button:hover { color: var(--accent); border-color: var(--accent); }
+  .status { color: var(--muted); font-size: 13px; margin: 8px 0 14px; }
+  .status.error { color: #b12a48; }
+  .gate { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 18px; max-width: 420px; margin: 40px auto; }
+  .gate h2 { margin: 0 0 10px; font-size: 16px; }
+  .gate p { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+  .gate form { display: flex; gap: 8px; }
+  .gate input { flex: 1; padding: 8px 10px; border: 1px solid var(--line); border-radius: 4px; font-size: 14px; background: var(--panel-2); color: var(--text); }
+  .gate button { padding: 8px 16px; background: var(--accent); color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
+  .trip-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px; }
+  .trip-card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
+  .trip-card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+  .trip-card .name { font-weight: 600; font-size: 15px; color: var(--text); }
+  .trip-card .meta { color: var(--muted); font-size: 13px; }
+  .trip-card .meta .slug { font-family: ui-monospace, "SF Mono", Menlo, monospace; color: var(--text); }
+  .links { display: flex; flex-direction: column; gap: 6px; }
+  .link-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .link-row label { min-width: 130px; color: var(--muted); font-size: 12px; }
+  .link-row input { flex: 1; min-width: 220px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 4px; font-size: 12px; background: var(--panel-2); color: var(--text); font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  .link-row button { padding: 5px 10px; background: transparent; border: 1px solid var(--line); color: var(--muted); border-radius: 4px; cursor: pointer; font-size: 12px; }
+  .link-row button:hover { color: var(--accent); border-color: var(--accent); }
+  .link-row .none { color: var(--muted); font-style: italic; font-size: 12px; }
+  .empty { color: var(--muted); font-style: italic; padding: 14px; text-align: center; }
+  .section h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 22px 0 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head">
+    <div>
+      <h1>Dana's trips</h1>
+      <div class="sub">Master list — every trip, every share link, on any device.</div>
+    </div>
+    <div class="head-actions" id="head-actions" hidden>
+      <a href="./" class="head-actions"><button type="button">All trips →</button></a>
+      <button type="button" id="refresh-btn">Refresh</button>
+      <button type="button" id="logout-btn">Forget password</button>
+    </div>
+  </div>
+
+  <div id="gate" class="gate">
+    <h2>Enter password</h2>
+    <p>The trip list is owner-only. Enter the same password you use to edit trips.</p>
+    <form id="gate-form">
+      <input id="gate-pw" type="password" autocomplete="current-password" placeholder="Password" autofocus required />
+      <button type="submit">Unlock</button>
+    </form>
+    <div id="gate-status" class="status"></div>
+  </div>
+
+  <div id="content" hidden>
+    <div id="status" class="status"></div>
+    <div id="year-sections"></div>
+    <div class="section">
+      <h2>Travel archive</h2>
+      <ul id="archive-list" class="trip-list"></ul>
+    </div>
+  </div>
+</div>
+
+<script src="registry-sync.js"></script>
+<script>
+const SNAPSHOT_API = "https://trip-snapshots.daner1231.workers.dev";
+const OWNER_PASSWORD_KEY = "trip-builder-owner-password";
+
+const gateEl = document.getElementById("gate");
+const contentEl = document.getElementById("content");
+const headActions = document.getElementById("head-actions");
+const statusEl = document.getElementById("status");
+const gateStatus = document.getElementById("gate-status");
+
+function getPw() { return localStorage.getItem(OWNER_PASSWORD_KEY) || null; }
+function setPw(v) {
+  if (v) localStorage.setItem(OWNER_PASSWORD_KEY, v);
+  else localStorage.removeItem(OWNER_PASSWORD_KEY);
+}
+
+function todayStr() {
+  const d = new Date();
+  return d.toISOString().slice(0, 10);
+}
+function isPast(t) { return t.end && t.end < todayStr(); }
+function fmtRange(t) {
+  if (!t.start && !t.end) return "No dates set";
+  if (t.start && t.end) return `${t.start} → ${t.end}`;
+  return t.start || t.end;
+}
+
+function tripPublicUrl(slug) {
+  return `${location.origin}${location.pathname.replace(/dana\.html$/, "")}trip.html?id=${encodeURIComponent(slug)}`;
+}
+function tripPricingUrl(slug, token) {
+  return `${tripPublicUrl(slug)}&v=${encodeURIComponent(token)}`;
+}
+
+async function copyText(s, btn) {
+  try {
+    await navigator.clipboard.writeText(s);
+    const orig = btn.textContent;
+    btn.textContent = "Copied";
+    setTimeout(() => { btn.textContent = orig; }, 1200);
+  } catch {
+    const tmp = document.createElement("textarea");
+    tmp.value = s; document.body.appendChild(tmp); tmp.select();
+    document.execCommand("copy"); tmp.remove();
+    const orig = btn.textContent;
+    btn.textContent = "Copied";
+    setTimeout(() => { btn.textContent = orig; }, 1200);
+  }
+}
+
+function renderRow(t) {
+  const li = document.createElement("li");
+  li.className = "trip-card";
+  const pub = t.slug ? tripPublicUrl(t.slug) : null;
+  const pricing = t.slug && t.viewerToken ? tripPricingUrl(t.slug, t.viewerToken) : null;
+
+  const head = document.createElement("div");
+  head.className = "trip-card-head";
+  const nameEl = document.createElement("div");
+  nameEl.className = "name";
+  nameEl.textContent = t.name || "Untitled trip";
+  const metaEl = document.createElement("div");
+  metaEl.className = "meta";
+  if (t.slug) {
+    const slugSpan = document.createElement("span");
+    slugSpan.className = "slug";
+    slugSpan.textContent = t.slug;
+    metaEl.appendChild(slugSpan);
+    metaEl.appendChild(document.createTextNode(" · " + fmtRange(t)));
+  } else {
+    metaEl.textContent = fmtRange(t);
+  }
+  head.appendChild(nameEl);
+  head.appendChild(metaEl);
+  li.appendChild(head);
+
+  const links = document.createElement("div");
+  links.className = "links";
+
+  // Public link
+  const pubRow = document.createElement("div");
+  pubRow.className = "link-row";
+  const pubLabel = document.createElement("label");
+  pubLabel.textContent = "Public (no prices)";
+  pubRow.appendChild(pubLabel);
+  if (pub) {
+    const inp = document.createElement("input");
+    inp.type = "text"; inp.readOnly = true; inp.value = pub;
+    pubRow.appendChild(inp);
+    const openBtn = document.createElement("button");
+    openBtn.type = "button"; openBtn.textContent = "Open";
+    openBtn.addEventListener("click", () => window.open(pub, "_blank", "noopener"));
+    pubRow.appendChild(openBtn);
+    const copyBtn = document.createElement("button");
+    copyBtn.type = "button"; copyBtn.textContent = "Copy";
+    copyBtn.addEventListener("click", () => copyText(pub, copyBtn));
+    pubRow.appendChild(copyBtn);
+    const slugBtn = document.createElement("button");
+    slugBtn.type = "button"; slugBtn.textContent = "Copy slug";
+    slugBtn.addEventListener("click", () => copyText(t.slug, slugBtn));
+    pubRow.appendChild(slugBtn);
+  } else {
+    const none = document.createElement("span");
+    none.className = "none"; none.textContent = "no slug yet";
+    pubRow.appendChild(none);
+  }
+  links.appendChild(pubRow);
+
+  // Pricing link
+  const priceRow = document.createElement("div");
+  priceRow.className = "link-row";
+  const priceLabel = document.createElement("label");
+  priceLabel.textContent = "With prices";
+  priceRow.appendChild(priceLabel);
+  if (pricing) {
+    const inp = document.createElement("input");
+    inp.type = "text"; inp.readOnly = true; inp.value = pricing;
+    priceRow.appendChild(inp);
+    const openBtn = document.createElement("button");
+    openBtn.type = "button"; openBtn.textContent = "Open";
+    openBtn.addEventListener("click", () => window.open(pricing, "_blank", "noopener"));
+    priceRow.appendChild(openBtn);
+    const copyBtn = document.createElement("button");
+    copyBtn.type = "button"; copyBtn.textContent = "Copy";
+    copyBtn.addEventListener("click", () => copyText(pricing, copyBtn));
+    priceRow.appendChild(copyBtn);
+  } else {
+    const none = document.createElement("span");
+    none.className = "none";
+    none.textContent = pub
+      ? "no token yet — open the trip and click Share once to generate"
+      : "—";
+    priceRow.appendChild(none);
+  }
+  links.appendChild(priceRow);
+
+  li.appendChild(links);
+  return li;
+}
+
+const ARCHIVE_SLUG = "archive";
+
+// The year a trip "belongs to" is the year its travel began — so a Dec 30 →
+// Jan 2 trip files under the December year, not the January one.
+function tripYear(t) {
+  if (t.start) return Number(t.start.slice(0, 4));
+  if (t.end)   return Number(t.end.slice(0, 4));
+  return null;
+}
+
+function render(trips) {
+  // Split the archive pseudo-trip into its own section.
+  const archive = trips.filter(t => t.slug === ARCHIVE_SLUG);
+  const real = trips.filter(t => t.slug !== ARCHIVE_SLUG);
+
+  // Group by start-year. Trips with no dates land in a "No dates set" bucket
+  // that sorts to the top so they don't get lost.
+  const byYear = new Map();
+  const undated = [];
+  for (const t of real) {
+    const y = tripYear(t);
+    if (y == null) { undated.push(t); continue; }
+    if (!byYear.has(y)) byYear.set(y, []);
+    byYear.get(y).push(t);
+  }
+  // Newest year first.
+  const years = Array.from(byYear.keys()).sort((a, b) => b - a);
+
+  const container = document.getElementById("year-sections");
+  container.innerHTML = "";
+
+  function appendSection(title, list) {
+    const section = document.createElement("div");
+    section.className = "section";
+    const h = document.createElement("h2");
+    h.textContent = title;
+    const ul = document.createElement("ul");
+    ul.className = "trip-list";
+    if (list.length === 0) ul.innerHTML = '<li class="empty">No trips.</li>';
+    else {
+      // Within a year, sort by start date ascending (earliest first).
+      list.slice().sort((a, b) => (a.start || "9999").localeCompare(b.start || "9999"))
+        .forEach(t => ul.appendChild(renderRow(t)));
+    }
+    section.appendChild(h);
+    section.appendChild(ul);
+    container.appendChild(section);
+  }
+
+  if (undated.length) appendSection("No dates set", undated);
+  if (years.length === 0 && undated.length === 0) {
+    appendSection("Trips", []);
+  }
+  for (const y of years) appendSection(String(y), byYear.get(y));
+
+  const ul3 = document.getElementById("archive-list");
+  ul3.innerHTML = "";
+  if (archive.length === 0) {
+    // No archive yet — offer to create it.
+    const li = document.createElement("li");
+    li.className = "empty";
+    li.innerHTML = `Travel archive not yet created. <a href="#" id="create-archive-link">Create archive</a>`;
+    ul3.appendChild(li);
+    document.getElementById("create-archive-link").addEventListener("click", (e) => {
+      e.preventDefault();
+      createArchive();
+    });
+  } else {
+    archive.forEach(t => ul3.appendChild(renderRow(t)));
+  }
+}
+
+// Create the archive trip on the worker (auth required). Mirrors what
+// index.html used to do on first click of the "Travel archive →" button.
+async function createArchive() {
+  const pw = getPw();
+  if (!pw) { showGate(); return; }
+  statusEl.textContent = "Creating archive…";
+  statusEl.className = "status";
+  try {
+    const res = await fetch(`${SNAPSHOT_API}/${ARCHIVE_SLUG}`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${pw}`,
+      },
+      body: JSON.stringify({
+        name: "Travel archive",
+        start: null,
+        end: null,
+        tzAware: false,
+        events: [],
+        options: [],
+        activeView: "main",
+        shrunkDays: [],
+      }),
+    });
+    if (!res.ok) {
+      statusEl.textContent = `Failed to create archive: ${res.status}`;
+      statusEl.className = "status error";
+      return;
+    }
+    // Open it — trip.html will pick it up from the worker and provision a
+    // local registry entry. That entry will then sync back via the home page
+    // (or next save) and start showing here.
+    window.open(tripPublicUrl(ARCHIVE_SLUG), "_blank", "noopener");
+    loadRegistry();
+  } catch (e) {
+    statusEl.textContent = `Network error: ${e.message}`;
+    statusEl.className = "status error";
+  }
+}
+
+async function loadRegistry() {
+  const pw = getPw();
+  if (!pw) { showGate(); return; }
+  statusEl.textContent = "Loading…";
+  statusEl.className = "status";
+  try {
+    const res = await fetch(`${SNAPSHOT_API}/registry`, {
+      headers: { "Authorization": `Bearer ${pw}` },
+      cache: "no-cache",
+    });
+    if (res.status === 401) {
+      setPw(null);
+      gateStatus.textContent = "That password didn't work.";
+      gateStatus.className = "status error";
+      showGate();
+      return;
+    }
+    if (res.status === 404) {
+      showContent();
+      statusEl.textContent = "No trips synced yet — create or save a trip on an authorized device and it'll appear here.";
+      render([]);
+      return;
+    }
+    if (!res.ok) {
+      statusEl.textContent = `Server error: ${res.status}`;
+      statusEl.className = "status error";
+      showContent();
+      return;
+    }
+    const body = await res.json();
+    const trips = Array.isArray(body?.trips) ? body.trips : [];
+    showContent();
+    const when = body.updatedAt ? new Date(body.updatedAt).toLocaleString() : null;
+    statusEl.textContent = when ? `${trips.length} trip${trips.length === 1 ? "" : "s"} · last updated ${when}` : `${trips.length} trip${trips.length === 1 ? "" : "s"}`;
+    statusEl.className = "status";
+    render(trips);
+  } catch (e) {
+    statusEl.textContent = `Network error: ${e.message}`;
+    statusEl.className = "status error";
+    showContent();
+  }
+}
+
+function showGate() {
+  gateEl.hidden = false;
+  contentEl.hidden = true;
+  headActions.hidden = true;
+  document.getElementById("gate-pw").focus();
+}
+function showContent() {
+  gateEl.hidden = true;
+  contentEl.hidden = false;
+  headActions.hidden = false;
+}
+
+document.getElementById("gate-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const pw = document.getElementById("gate-pw").value.trim();
+  if (!pw) return;
+  setPw(pw);
+  gateStatus.textContent = "";
+  gateStatus.className = "status";
+  loadRegistry();
+});
+
+document.getElementById("refresh-btn").addEventListener("click", loadRegistry);
+document.getElementById("logout-btn").addEventListener("click", () => {
+  if (!confirm("Forget the password on this device?")) return;
+  setPw(null);
+  showGate();
+});
+
+loadRegistry();
+</script>
+</body>
+</html>

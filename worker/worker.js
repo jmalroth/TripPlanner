@@ -8,6 +8,8 @@
 //   GET  /<slug>             -> 200 JSON trip (pricing stripped) | 404
 //   GET  /<slug>  + auth     -> 200 JSON trip (full, with pricing) | 404
 //   PUT  /<slug>  + auth     -> 200 { ok: true } | 401 | 413 | 400
+//   GET  /registry + auth    -> 200 JSON registry | 401 | 404
+//   PUT  /registry + auth    -> 200 { ok: true } | 401 | 413 | 400
 //   POST /snap               -> 201 { id } (anonymous one-off snapshot)
 //   GET  /snap/<id>          -> 200 JSON snapshot | 404
 //   POST /smart-parse + auth -> 200 { events, totalPrice? } | 401 | 502
@@ -28,6 +30,7 @@ const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,80}$/;
 const SNAP_ID_RE = /^[0-9a-f]{8,64}$/;
 const TRIP_PREFIX = "trip:";
 const SNAP_PREFIX = "snap:";
+const REGISTRY_KEY = "registry:default";
 
 const PRICING_KEYS = ["lineItems", "priceSplit", "priceToken", "viewerToken"];
 
@@ -71,6 +74,25 @@ export default {
     const url = new URL(req.url);
     const path = url.pathname.replace(/^\/+|\/+$/g, "");
     const parts = path.split("/").filter(Boolean);
+
+    // Registry — the owner's list of trips. Auth required for both read and
+    // write; this is what dana.html fetches so all slugs are visible on any
+    // device after entering the password.
+    if (parts.length === 1 && parts[0] === "registry") {
+      if (!isOwner(req, env)) return json({ error: "unauthorized" }, { status: 401 });
+      if (req.method === "GET") {
+        const value = await env.SNAPSHOTS.get(REGISTRY_KEY);
+        if (value == null) return json({ error: "not found" }, { status: 404 });
+        return new Response(value, { status: 200, headers: { "Content-Type": "application/json", ...CORS } });
+      }
+      if (req.method === "PUT") {
+        const body = await req.text();
+        if (body.length > MAX_BODY_BYTES) return json({ error: "too large" }, { status: 413 });
+        try { JSON.parse(body); } catch { return json({ error: "invalid JSON" }, { status: 400 }); }
+        await env.SNAPSHOTS.put(REGISTRY_KEY, body);
+        return json({ ok: true });
+      }
+    }
 
     // Snapshot creation.
     if (req.method === "POST" && parts[0] === "snap" && parts.length === 1) {

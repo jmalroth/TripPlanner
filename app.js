@@ -256,7 +256,10 @@ function save() {
     start: state.start || null,
     end: state.end || null,
   });
-  if (!BOOTING) scheduleSync();
+  if (!BOOTING) {
+    scheduleSync();
+    window.RegistrySync?.schedulePush();
+  }
   updateSyncIndicator();
 }
 
