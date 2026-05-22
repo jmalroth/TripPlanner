@@ -10,8 +10,9 @@ const REGISTRY_KEY = "trip-builder-trips";
 const TRIP_KEY_PREFIX = "trip-builder-trip-";
 
 let CURRENT_TRIP_ID = null;
-let CAN_EDIT = false;       // password held on this device → can write + see pricing
-let CAN_SEE_PRICING = false; // owner OR viewer arrived via ?v=<token>
+let IS_OWNER = false;       // signed-in user owns this trip (only they can re-share)
+let CAN_EDIT = false;       // owner OR editor-level access
+let CAN_SEE_PRICING = false; // owner, editor, viewer-pricing, or token-bearing anon
 let CURRENT_VIEWER_TOKEN = null; // populated when bootstrap saw ?v= in URL
 function STORAGE_KEY_FOR(id) { return TRIP_KEY_PREFIX + id; }
 function STORAGE_KEY() { return STORAGE_KEY_FOR(CURRENT_TRIP_ID); }
@@ -25,37 +26,38 @@ function setOwnerPassword(pw) {
   else localStorage.removeItem(OWNER_PASSWORD_KEY);
 }
 
-// Fetch a trip from the worker. Returns { ok, status, body }. The caller
-// decides what to do with 401/404/etc. — fetchTrip itself never throws.
-// viewerToken (optional) → ?v=<token> on the request, lets the worker return
-// pricing without an owner password.
+// Wait until window.fb (firebase-client.js) has finished loading.
+function whenFb() {
+  if (window.fb) return Promise.resolve();
+  return new Promise((resolve) => {
+    const iv = setInterval(() => { if (window.fb) { clearInterval(iv); resolve(); } }, 30);
+  });
+}
+
+// Fetch a trip. If signed in, reads from Firestore (including pricing if
+// owner). If not signed in (anonymous ?v= viewer), falls back to the worker
+// which still serves pricing-stripped JSON to non-owners.
 async function fetchTrip(slug, viewerToken) {
-  const headers = {};
-  const pw = getOwnerPassword();
-  if (pw) headers["Authorization"] = `Bearer ${pw}`;
-  const qs = viewerToken ? `?v=${encodeURIComponent(viewerToken)}` : "";
-  try {
-    const res = await fetch(`${SNAPSHOT_API}/${encodeURIComponent(slug)}${qs}`, { headers, cache: "no-cache" });
-    if (res.status === 200) return { ok: true, status: 200, body: await res.json() };
-    return { ok: false, status: res.status };
-  } catch (e) {
-    return { ok: false, status: 0, error: e.message };
+  await whenFb();
+  // Anonymous viewer arriving via a shared ?v= link: keep using the worker
+  // so they can read without a Firebase account.
+  if (viewerToken && !window.fb.user) {
+    const qs = `?v=${encodeURIComponent(viewerToken)}`;
+    try {
+      const res = await fetch(`${SNAPSHOT_API}/${encodeURIComponent(slug)}${qs}`, { cache: "no-cache" });
+      if (res.status === 200) return { ok: true, status: 200, body: await res.json(), isOwner: false };
+      return { ok: false, status: res.status };
+    } catch (e) { return { ok: false, status: 0, error: e.message }; }
   }
+  if (!window.fb.user) return { ok: false, status: 401 };
+  const res = await window.fb.loadTrip(slug);
+  return res; // { ok, status, body, isOwner }
 }
 
 async function putTrip(slug, blob) {
-  const pw = getOwnerPassword();
-  if (!pw) return { ok: false, status: 401 };
-  try {
-    const res = await fetch(`${SNAPSHOT_API}/${encodeURIComponent(slug)}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${pw}` },
-      body: JSON.stringify(blob),
-    });
-    return { ok: res.ok, status: res.status };
-  } catch (e) {
-    return { ok: false, status: 0, error: e.message };
-  }
+  await whenFb();
+  if (!window.fb.user) return { ok: false, status: 401 };
+  return window.fb.saveTrip(slug, blob);
 }
 
 // Prompt for the owner password. Stored in localStorage so it sticks across
@@ -286,36 +288,29 @@ async function syncNow() {
   SYNC_PENDING = false;
   const slug = tripSlug();
   if (!slug) return;
-  // Viewer-with-pricing mode: the URL had ?v=<token>. They can browse, but
-  // never write — don't prompt for a password they don't have.
-  if (CURRENT_VIEWER_TOKEN && !getOwnerPassword()) {
+  // Anonymous ?v= viewer: never write back.
+  if (CURRENT_VIEWER_TOKEN && !window.fb?.user) {
     SYNC_LAST_STATUS = null;
     updateSyncIndicator();
     return;
   }
-  // First edit on a fresh device: ask for the password so we can sync. Cancel
-  // means "viewer mode on this device" — local edits stay local.
-  if (!getOwnerPassword()) {
-    const pw = await promptForPassword("Editing this trip on a new device.");
-    if (!pw) { SYNC_LAST_STATUS = null; updateSyncIndicator(); return; }
+  // Not signed in (shouldn't happen — auth gate blocks). No-op.
+  if (!window.fb?.user) {
+    SYNC_LAST_STATUS = null;
+    updateSyncIndicator();
+    return;
+  }
+  // Not the owner — can't write.
+  if (!CAN_EDIT) {
+    SYNC_LAST_STATUS = null;
+    updateSyncIndicator();
+    return;
   }
   SYNC_LAST_STATUS = "saving";
   updateSyncIndicator();
   const res = await putTrip(slug, state);
   if (res.ok) {
-    const wasEdit = CAN_EDIT, wasPricing = CAN_SEE_PRICING;
-    CAN_EDIT = true;
-    CAN_SEE_PRICING = true;
     SYNC_LAST_STATUS = "saved";
-    // Only re-render if a permission changed (i.e. the pricing tab needs to
-    // appear). Otherwise we'd blow away focus on an input the user is
-    // typing in.
-    if (!wasEdit || !wasPricing) renderApp();
-  } else if (res.status === 401) {
-    SYNC_LAST_STATUS = "error";
-    setOwnerPassword(null);
-    const pw = await promptForPassword("That password didn't work.");
-    if (pw) scheduleSync();
   } else {
     SYNC_LAST_STATUS = "error";
   }
@@ -369,81 +364,185 @@ function newViewerToken() {
 async function shareTrip() {
   const slug = tripSlug();
   if (!slug) { alert("This trip doesn't have a slug yet — give it a name first."); return; }
-  const publicUrl = `${location.origin}${location.pathname}?id=${encodeURIComponent(slug)}`;
-
-  let pricingUrl = null;
-  if (CAN_EDIT) {
-    if (!state.viewerToken) {
-      state.viewerToken = newViewerToken();
-      save();
-      // Push immediately — the recipient needs the token on the server to
-      // validate, so we can't wait for the debounced sync.
-      await syncNow();
-    }
-    pricingUrl = `${publicUrl}&v=${encodeURIComponent(state.viewerToken)}`;
-  }
-  showShareDropdown({ publicUrl, pricingUrl });
+  showShareDropdown();
 }
 
-function showShareDropdown({ publicUrl, pricingUrl }) {
+function showShareDropdown() {
   document.getElementById("share-dropdown")?.remove();
   const panel = document.createElement("div");
   panel.id = "share-dropdown";
   panel.className = "export-links";
-  const pricingRow = pricingUrl ? `
-    <div class="export-links-row">
-      <label>With prices (read-only)</label>
-      <div class="export-links-input">
-        <input type="text" readonly data-which="pricing" />
-        <button type="button" data-copy="pricing">Copy</button>
-        <button type="button" data-wa="pricing" class="ghost" title="Send via WhatsApp">WhatsApp</button>
+  const pricingRow = "";
+  // Public live link (anonymous viewers, no account needed). Owner-only.
+  const publicLinkRow = IS_OWNER ? `
+    <div class="export-links-row" style="margin-top:12px; padding-top:12px; border-top: 1px solid var(--line);">
+      <label>Public link (no sign-in needed)</label>
+      <div data-public-link-state>
+        <button type="button" data-public-create>Create public link</button>
+        <span data-public-link-msg style="margin-left:8px;font-size:12px;color:var(--muted);"></span>
       </div>
     </div>
   ` : "";
-  panel.innerHTML = `
-    <div class="export-links-row">
-      <label>Public link (no prices)</label>
+
+  // Only the owner can re-share (per rules). Editor can edit content but
+  // not change who sees what.
+  const shareByEmailRow = IS_OWNER ? `
+    <div class="export-links-row" style="margin-top:12px; padding-top:12px; border-top: 1px solid var(--line);">
+      <label>Share with a myitin user</label>
       <div class="export-links-input">
-        <input type="text" readonly data-which="public" />
-        <button type="button" data-copy="public">Copy</button>
-        <button type="button" data-wa="public" class="ghost" title="Send via WhatsApp">WhatsApp</button>
+        <input type="email" data-which="share-email" placeholder="friend@example.com" />
+        <select data-which="share-level" style="padding:6px 8px; border:1px solid var(--line); border-radius:4px; font-size:13px;">
+          <option value="viewer" selected>View (no prices)</option>
+          <option value="viewer-pricing">View + prices</option>
+          <option value="editor">Editor (full access)</option>
+        </select>
+        <button type="button" data-share-email>Share</button>
       </div>
+      <div data-share-email-msg style="font-size:12px;margin-top:6px;min-height:16px;"></div>
+      <div data-shared-with-list style="font-size:12px;margin-top:6px;"></div>
     </div>
-    ${pricingRow}
-    <div class="export-links-files">
-      Both links always reflect the latest edits, no re-share needed.
-    </div>
+  ` : "";
+  panel.innerHTML = `
+    ${publicLinkRow}
+    ${shareByEmailRow}
     <button type="button" class="export-links-close" aria-label="Close">×</button>
   `;
-  panel.querySelector('input[data-which=public]').value = publicUrl;
-  if (pricingUrl) panel.querySelector('input[data-which=pricing]').value = pricingUrl;
-  panel.querySelectorAll('button[data-copy]').forEach(btn => {
-    btn.addEventListener("click", async () => {
-      const which = btn.dataset.copy;
-      const url = which === "pricing" ? pricingUrl : publicUrl;
+  // Public live link create / disable.
+  const publicState = panel.querySelector('div[data-public-link-state]');
+  const publicMsg = panel.querySelector('span[data-public-link-msg]');
+  function publicLinkUrl(token) {
+    return `${location.origin}${location.pathname}?p=${encodeURIComponent(token)}`;
+  }
+  async function renderPublicLink() {
+    if (!publicState || !IS_OWNER) return;
+    const slug = tripSlug();
+    const res = await window.fb.loadTrip(slug);
+    const token = res.body?.publicToken;
+    if (!token) {
+      publicState.innerHTML = `
+        <button type="button" data-public-create>Create public link</button>
+        <span data-public-link-msg style="margin-left:8px;font-size:12px;color:var(--muted);"></span>
+      `;
+      publicState.querySelector('[data-public-create]').addEventListener("click", async () => {
+        try {
+          await window.fb.createPublicLink(slug);
+          renderPublicLink();
+        } catch (e) {
+          publicState.querySelector('[data-public-link-msg]').textContent = e.message;
+        }
+      });
+    } else {
+      const url = publicLinkUrl(token);
+      publicState.innerHTML = `
+        <div class="export-links-input">
+          <input type="text" readonly value="${url.replace(/"/g, "&quot;")}" />
+          <button type="button" data-public-copy>Copy</button>
+          <button type="button" data-public-disable class="ghost">Disable</button>
+        </div>
+        <span data-public-link-msg style="font-size:12px;color:var(--muted);"></span>
+      `;
+      publicState.querySelector('[data-public-copy]').addEventListener("click", async () => {
+        const btn = publicState.querySelector('[data-public-copy]');
+        try {
+          await navigator.clipboard.writeText(url);
+          const orig = btn.textContent;
+          btn.textContent = "Copied";
+          setTimeout(() => { btn.textContent = orig; }, 1200);
+        } catch (_) {
+          const inp = publicState.querySelector('input');
+          inp.select(); document.execCommand("copy");
+        }
+      });
+      publicState.querySelector('[data-public-disable]').addEventListener("click", async () => {
+        if (!confirm("Disable the public link? Anyone with the URL will lose access.")) return;
+        try {
+          await window.fb.removePublicLink(slug);
+          renderPublicLink();
+        } catch (e) {
+          publicState.querySelector('[data-public-link-msg]').textContent = e.message;
+        }
+      });
+    }
+  }
+  if (publicState) renderPublicLink();
+
+  // Share-by-email handler + current permissions listing.
+  const shareInput = panel.querySelector('input[data-which=share-email]');
+  const shareLevel = panel.querySelector('select[data-which=share-level]');
+  const shareBtn = panel.querySelector('button[data-share-email]');
+  const shareMsg = panel.querySelector('div[data-share-email-msg]');
+  const sharedList = panel.querySelector('div[data-shared-with-list]');
+  const LEVEL_LABELS = {
+    "viewer": "View",
+    "viewer-pricing": "View + prices",
+    "editor": "Editor",
+  };
+  async function renderSharedWith() {
+    if (!sharedList) return;
+    const slug = tripSlug();
+    const res = await window.fb.loadTrip(slug);
+    const perms = (res.body?.permissions) || {};
+    const uids = Object.keys(perms);
+    if (!uids.length) { sharedList.textContent = "Not shared with anyone yet."; return; }
+    sharedList.innerHTML = '<div style="margin-bottom:4px;">Shared with:</div>';
+    for (const uid of uids) {
+      const prof = await window.fb.lookupProfile(uid);
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;align-items:center;gap:6px;margin:3px 0;";
+      const who = document.createElement("span");
+      who.textContent = prof.displayName || prof.email || uid.slice(0, 6);
+      who.style.cssText = "flex:1;background:var(--panel-2);border:1px solid var(--line);border-radius:999px;padding:2px 10px;";
+      row.appendChild(who);
+      const sel = document.createElement("select");
+      sel.style.cssText = "padding:2px 6px; border:1px solid var(--line); border-radius:4px; font-size:12px;";
+      for (const lvl of ["viewer", "viewer-pricing", "editor"]) {
+        const o = document.createElement("option");
+        o.value = lvl; o.textContent = LEVEL_LABELS[lvl];
+        if (perms[uid] === lvl) o.selected = true;
+        sel.appendChild(o);
+      }
+      sel.addEventListener("change", async () => {
+        try {
+          await window.fb.setTripPermissionLevel(slug, uid, sel.value);
+          shareMsg.textContent = `Updated ${who.textContent} to ${LEVEL_LABELS[sel.value]}.`;
+          shareMsg.style.color = "#2a8b4a";
+        } catch (e) {
+          shareMsg.textContent = e.message; shareMsg.style.color = "#b12a48";
+          renderSharedWith();
+        }
+      });
+      row.appendChild(sel);
+      const x = document.createElement("button");
+      x.textContent = "×";
+      x.title = "Unshare";
+      x.style.cssText = "background:none;border:none;cursor:pointer;color:var(--muted);padding:0 4px;font-size:16px;";
+      x.addEventListener("click", async () => {
+        try { await window.fb.unshareTripWithUid(slug, uid); await renderSharedWith(); }
+        catch (e) { shareMsg.textContent = e.message; shareMsg.style.color = "#b12a48"; }
+      });
+      row.appendChild(x);
+      sharedList.appendChild(row);
+    }
+  }
+  if (shareBtn) {
+    shareBtn.addEventListener("click", async () => {
+      const email = (shareInput.value || "").trim();
+      const level = shareLevel?.value || "viewer";
+      if (!email) { shareMsg.textContent = "Enter an email."; shareMsg.style.color = "#b12a48"; return; }
       try {
-        await navigator.clipboard.writeText(url);
-        const orig = btn.textContent;
-        btn.textContent = "Copied";
-        setTimeout(() => { btn.textContent = orig; }, 1200);
+        await window.fb.shareTripWithEmail(tripSlug(), email, level);
+        shareMsg.textContent = `Shared with ${email} (${LEVEL_LABELS[level]}).`;
+        shareMsg.style.color = "#2a8b4a";
+        shareInput.value = "";
+        renderSharedWith();
       } catch (e) {
-        const input = panel.querySelector(`input[data-which=${which}]`);
-        input.select();
-        document.execCommand("copy");
+        shareMsg.textContent = e.message;
+        shareMsg.style.color = "#b12a48";
       }
     });
-  });
-  panel.querySelectorAll('button[data-wa]').forEach(btn => {
-    btn.addEventListener("click", () => {
-      const which = btn.dataset.wa;
-      const url = which === "pricing" ? pricingUrl : publicUrl;
-      const tripName = state.name || "Trip";
-      const text = `${tripName}\n${url}`;
-      // wa.me/?text=... opens WhatsApp's contact picker so the user picks who
-      // to send to. Works on web, desktop, and mobile.
-      window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank", "noopener");
-    });
-  });
+    renderSharedWith();
+  }
+
   panel.querySelector(".export-links-close").addEventListener("click", () => panel.remove());
   document.getElementById("share-btn")?.parentElement?.appendChild(panel);
   setTimeout(() => {
@@ -4359,19 +4458,25 @@ function renderApp() {
     }
   }
 
-  // Pricing is gated behind the owner password. Viewers don't see the tab,
-  // and if their stored activeView was "pricing" we silently fall back to main.
+  // Tab visibility per role:
+  //   owner / editor → all tabs
+  //   viewer-pricing → My itin + Pricing
+  //   viewer / public link → My itin only
   const pricingAllowed = CAN_SEE_PRICING;
-  if (!pricingAllowed && state.activeView === "pricing") state.activeView = "main";
+  const editorTabsAllowed = CAN_EDIT;
+  const allowedTabs = new Set(["main"]);
+  if (pricingAllowed) allowedTabs.add("pricing");
+  if (editorTabsAllowed) { allowedTabs.add("todo"); allowedTabs.add("options"); allowedTabs.add("compare"); }
+  if (!allowedTabs.has(state.activeView)) state.activeView = "main";
   document.querySelectorAll(".tab-btn").forEach(b => {
-    if (b.dataset.tab === "pricing") b.hidden = !pricingAllowed;
+    b.hidden = !allowedTabs.has(b.dataset.tab);
     b.classList.toggle("active", b.dataset.tab === state.activeView);
   });
   document.getElementById("tab-main").hidden = state.activeView !== "main";
-  document.getElementById("tab-todo").hidden = state.activeView !== "todo";
+  document.getElementById("tab-todo").hidden = !allowedTabs.has("todo") || state.activeView !== "todo";
   document.getElementById("tab-pricing").hidden = !pricingAllowed || state.activeView !== "pricing";
-  document.getElementById("tab-options").hidden = state.activeView !== "options";
-  document.getElementById("tab-compare").hidden = state.activeView !== "compare";
+  document.getElementById("tab-options").hidden = !allowedTabs.has("options") || state.activeView !== "options";
+  document.getElementById("tab-compare").hidden = !allowedTabs.has("compare") || state.activeView !== "compare";
 
   updateSyncIndicator();
 
@@ -4779,6 +4884,31 @@ async function bootstrap() {
   const params = new URLSearchParams(window.location.search);
   migrateLegacy();
 
+  // ?p=<token> = anonymous public viewer. Load the mirror, render
+  // read-only, skip everything trip-registry / sync related.
+  const publicToken = params.get("p");
+  if (publicToken) {
+    await whenFb();
+    const blob = await window.fb.loadPublicTrip(publicToken);
+    if (!blob) {
+      document.body.innerHTML = '<div style="padding:40px;text-align:center;font-family:system-ui">This public link is invalid or has been disabled.</div>';
+      return;
+    }
+    CURRENT_TRIP_ID = blob.slug || "public";
+    CAN_EDIT = false;
+    CAN_SEE_PRICING = false;
+    IS_OWNER = false;
+    Object.assign(state, blob);
+    if (!state.options) state.options = [];
+    ensureOptionGroups();
+    state.activeView = "main";
+    if (!state.shrunkDays) state.shrunkDays = [];
+    delete state.expandedDays;
+    BOOTING = false;
+    renderApp();
+    return;
+  }
+
   const slug = params.get("id");
   CURRENT_VIEWER_TOKEN = params.get("v") || null;
   let tripId = params.get("trip");
@@ -4789,13 +4919,19 @@ async function bootstrap() {
     if (hit) tripId = hit.id;
   }
 
-  // Pull the trip from the worker (always, even if we have it locally — newer
-  // wins). When it's a slug we've never seen on this device, the worker is
-  // how we discover it: provision a registry entry on the fly.
+  // Wait for Firebase auth state to settle before fetching, so loadTrip()
+  // knows whether to read as the owner (with pricing) or as a viewer.
+  await whenFb();
+  await window.fb.whenAuthReady();
+
+  // Pull the trip — from Firestore when signed in, from the worker for
+  // anonymous ?v= viewers. fetchTrip handles both cases.
   let serverState = null;
+  let serverIsOwner = false;
+  let serverLevel = null; // "owner" | "viewer" | "viewer-pricing" | "editor" | null
   if (slug) {
     const res = await fetchTrip(slug, CURRENT_VIEWER_TOKEN);
-    if (res.ok) serverState = res.body;
+    if (res.ok) { serverState = res.body; serverIsOwner = !!res.isOwner; serverLevel = res.level || null; }
     if (!tripId && serverState) {
       tripId = newTripId();
       upsertRegistry({
@@ -4826,20 +4962,20 @@ async function bootstrap() {
 
   CURRENT_TRIP_ID = tripId;
 
-  // Owner mode if any of:
-  //   1. A password is stored on this device (we trust it; a 401 on the
-  //      next sync will clear it and reprompt).
-  //   2. The worker returned pricing fields (it only does that for valid
-  //      auth, so the password is already accepted).
-  //   3. localStorage already has pricing fields for this trip (covers the
-  //      pre-worker user who's editing on their original device).
+  // Owner mode is now driven entirely by Firestore: loadTrip returns
+  // isOwner=true when the signed-in user owns the trip (and the pricing
+  // subcollection was readable). For anonymous ?v= viewers the worker
+  // returns whatever the viewer token allows, with pricing fields inline.
   const serverHasPricing = serverState && PRICING_KEYS.some(k => serverState[k] !== undefined);
-  const localBlob = safeParse(localStorage.getItem(STORAGE_KEY_FOR(tripId)));
-  const localHasPricing = localBlob && PRICING_KEYS.some(k => localBlob[k] !== undefined);
-  CAN_EDIT = !!getOwnerPassword() || (localHasPricing && !CURRENT_VIEWER_TOKEN);
-  // Pricing visible if we can edit (full access) OR the worker just returned
-  // pricing (viewer-with-token reads succeed) OR local already has pricing.
-  CAN_SEE_PRICING = CAN_EDIT || serverHasPricing || localHasPricing;
+  IS_OWNER = serverIsOwner;
+  // Owner OR editor can edit. Editor is a shared-user level that grants
+  // full write access (still not owner — can't re-share or change ownership).
+  CAN_EDIT = serverIsOwner || serverLevel === "editor";
+  // Pricing shows for owner, editor, viewer-pricing, or anonymous ?v= viewer
+  // when the worker returned pricing fields inline.
+  CAN_SEE_PRICING = CAN_EDIT
+    || serverLevel === "viewer-pricing"
+    || (!!CURRENT_VIEWER_TOKEN && serverHasPricing);
 
   // Newest-wins merge: server wins if its modifiedAt is newer-or-equal.
   // Pricing fields, however, are *only* taken from the server when the server
@@ -4871,7 +5007,8 @@ async function bootstrap() {
   load();
   if (!state.options) state.options = [];
   ensureOptionGroups();
-  if (!state.activeView) state.activeView = "main";
+  // Always land on the itinerary tab when opening a trip.
+  state.activeView = "main";
   if (!state.shrunkDays) state.shrunkDays = [];
   delete state.expandedDays;
 

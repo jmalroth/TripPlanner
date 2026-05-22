@@ -1,0 +1,132 @@
+rules_version = '2';
+
+// Firestore security rules for myitin.
+//
+// Model:
+//   users/{uid}                              — owned by that user
+//   trips/{slug}                             — owner + sharedWith viewers can read; only owner writes
+//     trips/{slug}/private/pricing           — owner only (lineItems, priceSplit, totals)
+//   snapshots/{id}                           — anonymous one-off snapshots; public read, no client writes
+//
+// Feature flags live in the user's auth custom claims (set via Admin SDK),
+// readable here as request.auth.token.<flag>.
+
+service cloud.firestore {
+  match /databases/{db}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(data) {
+      return isSignedIn() && request.auth.uid == data.ownerId;
+    }
+
+    // For LIST queries Firestore aligns rule conditions to the query's
+    // filter fields. subscribeMyTrips queries by `permissionUids
+    // array-contains uid`, so the read rule checks the same field.
+    function isViewer(data) {
+      return isSignedIn()
+        && 'permissionUids' in data
+        && request.auth.uid in data.permissionUids;
+    }
+
+    function levelOf(data) {
+      return ('permissions' in data && request.auth.uid in data.permissions)
+        ? data.permissions[request.auth.uid] : '';
+    }
+
+    function canEdit(data) {
+      return isOwner(data) || (isSignedIn() && levelOf(data) == 'editor');
+    }
+
+    function canSeePricing(data) {
+      return isOwner(data) || (isSignedIn() && levelOf(data) in ['viewer-pricing', 'editor']);
+    }
+
+    // ---- users/{uid} ----
+    // Profile doc. Any signed-in user can read another user's profile to
+    // resolve a uid to a display name (used in trip "Shared with: ..." UI).
+    // Only the user themselves can write.
+    match /users/{uid} {
+      allow read:  if isSignedIn();
+      allow create, update: if isSignedIn()
+                            && request.auth.uid == uid
+                            && request.resource.data.keys().hasOnly(['displayName', 'email', 'createdAt', 'hasPassword', 'watchingColor']);
+      allow delete: if false;
+    }
+
+    // ---- userTripLabels/{uid} ----
+    // Per-user labels on shared trips: { slug: "traveling" | "watching" }.
+    // Only the user themselves can read or write.
+    match /userTripLabels/{uid} {
+      allow read, write: if isSignedIn() && request.auth.uid == uid;
+    }
+
+    // ---- userEmails/{normalized-email} ----
+    // Email → uid lookup so the owner can share trips by typing an email.
+    // Any signed-in user can read (we need to look up other people's uids).
+    // Only the user themselves can write the entry for their own email.
+    match /userEmails/{email} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn()
+                            && request.resource.data.uid == request.auth.uid;
+      allow delete: if false;
+    }
+
+    // ---- trips/{slug} ----
+    match /trips/{slug} {
+      allow read: if isOwner(resource.data) || isViewer(resource.data);
+
+      // Create: must stamp ownerId = self.
+      allow create: if isSignedIn()
+                    && request.resource.data.ownerId == request.auth.uid;
+
+      // Update: owner OR editor. Neither can change ownerId. Only the owner
+      // can modify the permissions map / permissionUids array (editors can
+      // edit content but not re-share).
+      allow update: if canEdit(resource.data)
+                    && request.resource.data.ownerId == resource.data.ownerId
+                    && (isOwner(resource.data)
+                        || (request.resource.data.get('permissions', {})
+                            == resource.data.get('permissions', {})
+                            && request.resource.data.get('permissionUids', [])
+                            == resource.data.get('permissionUids', [])));
+
+      allow delete: if isOwner(resource.data);
+
+      // ---- trips/{slug}/private/pricing ----
+      // Read: anyone with pricing or editor access on the parent trip.
+      // Write: owner + editor only.
+      match /private/{docId} {
+        allow read: if canSeePricing(get(/databases/$(db)/documents/trips/$(slug)).data);
+        allow write: if canEdit(get(/databases/$(db)/documents/trips/$(slug)).data);
+      }
+    }
+
+    // ---- publicTrips/{token} ----
+    // Mirror of a trip the owner has chosen to expose publicly. Anyone with
+    // the URL can read; only the owner of the original trip can write.
+    match /publicTrips/{token} {
+      allow read: if true;
+      allow create: if isSignedIn()
+                    && request.resource.data.ownerId == request.auth.uid;
+      allow update: if isSignedIn()
+                    && resource.data.ownerId == request.auth.uid
+                    && request.resource.data.ownerId == resource.data.ownerId;
+      allow delete: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+    }
+
+    // ---- snapshots/{id} ----
+    // Anonymous one-off snapshots. Public read so a snapshot URL works without
+    // sign-in. Any signed-in user can create one of their own; the creator can
+    // delete it. No updates (snapshots are frozen).
+    match /snapshots/{id} {
+      allow read: if true;
+      allow create: if isSignedIn()
+                    && request.resource.data.createdBy == request.auth.uid;
+      allow delete: if isSignedIn() && resource.data.createdBy == request.auth.uid;
+      allow update: if false;
+    }
+  }
+}

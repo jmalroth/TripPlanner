@@ -6,8 +6,42 @@
 <meta name="robots" content="noindex, nofollow" />
 <title>Trip Timeline Builder</title>
 <link rel="stylesheet" href="styles.css" />
+<script type="module" src="firebase-client.js"></script>
+<style>
+  .auth-gate { position: fixed; inset: 0; background: var(--bg, #fff); display: none; align-items: center; justify-content: center; z-index: 9999; }
+  .auth-gate.show { display: flex; }
+  .auth-card { background: var(--panel, #fff); border: 1px solid var(--line, #ddd); border-radius: 10px; padding: 28px 26px; width: min(380px, calc(100vw - 32px)); }
+  .auth-card h1 { margin: 0 0 4px; font-size: 22px; }
+  .auth-card .sub { color: var(--muted, #888); font-size: 13px; margin-bottom: 18px; }
+  .auth-card button.gbtn { width: 100%; padding: 10px; background: var(--accent, #4285f4); color: #fff; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; margin-bottom: 10px; }
+  .auth-card .sep { text-align: center; color: var(--muted, #888); font-size: 12px; margin: 10px 0; }
+  .auth-card input { width: 100%; padding: 8px 10px; border: 1px solid var(--line, #ddd); border-radius: 6px; font-size: 14px; margin-bottom: 8px; box-sizing: border-box; }
+  .auth-card .row-btns { display: flex; gap: 8px; }
+  .auth-card .row-btns button { flex: 1; padding: 8px; border: 1px solid var(--line, #ddd); background: var(--panel-2, #f5f5f5); color: var(--text, #111); border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .auth-card .row-btns button:hover { background: var(--accent, #4285f4); color: #fff; border-color: var(--accent, #4285f4); }
+  .auth-error { color: #b12a48; font-size: 12px; margin-top: 6px; min-height: 16px; }
+  .auth-msg { color: #2a8b4a; font-size: 12px; margin-top: 6px; min-height: 16px; }
+</style>
 </head>
 <body>
+  <div id="auth-gate" class="auth-gate">
+    <div class="auth-card">
+      <h1>Sign in</h1>
+      <div class="sub">Sign in to view this trip.</div>
+      <button class="gbtn" id="auth-google">Continue with Google</button>
+      <div class="sep">— or —</div>
+      <input id="auth-email" type="email" placeholder="you@example.com" autocomplete="email" />
+      <input id="auth-password" type="password" placeholder="Password (optional)" autocomplete="current-password" />
+      <div class="row-btns">
+        <button id="auth-signin">Sign in</button>
+        <button id="auth-signup">Create account</button>
+        <button id="auth-magic">Email me a link</button>
+      </div>
+      <div class="auth-error" id="auth-error"></div>
+      <div class="auth-msg" id="auth-msg"></div>
+    </div>
+  </div>
+
   <header class="topbar">
     <div class="trip-meta">
       <a href="./" class="back-link" title="All trips">← Trips</a>
@@ -277,6 +311,61 @@
     </form>
   </dialog>
 
+  <script>
+  // Auth gate. Anonymous viewers reaching this page via a shared ?v=<token>
+  // link are allowed through unsigned; everyone else has to sign in first.
+  (function setupTripAuthGate() {
+    const gate = document.getElementById("auth-gate");
+    const err = document.getElementById("auth-error");
+    const msg = document.getElementById("auth-msg");
+    const setErr = (t) => { err.textContent = t || ""; msg.textContent = ""; };
+    const setMsg = (t) => { msg.textContent = t || ""; err.textContent = ""; };
+
+    const params = new URLSearchParams(window.location.search);
+    const hasViewerToken = !!params.get("v");
+    const hasPublicToken = !!params.get("p");
+
+    function whenReady(cb) {
+      if (window.fb) return cb();
+      const iv = setInterval(() => { if (window.fb) { clearInterval(iv); cb(); } }, 30);
+    }
+
+    whenReady(() => {
+      window.fb.onAuth((user) => {
+        if (user || hasViewerToken || hasPublicToken) {
+          gate.classList.remove("show");
+        } else {
+          gate.classList.add("show");
+        }
+      });
+      document.getElementById("auth-google").addEventListener("click", async () => {
+        setErr(""); try { await window.fb.signInGoogle(); }
+        catch (e) { setErr(e.message || "Google sign-in failed"); }
+      });
+      document.getElementById("auth-signin").addEventListener("click", async () => {
+        const email = document.getElementById("auth-email").value.trim();
+        const pw = document.getElementById("auth-password").value;
+        if (!email || !pw) { setErr("Email and password required"); return; }
+        try { await window.fb.signInPassword(email, pw); }
+        catch (e) { setErr(e.message || "Sign-in failed"); }
+      });
+      document.getElementById("auth-signup").addEventListener("click", async () => {
+        const email = document.getElementById("auth-email").value.trim();
+        const pw = document.getElementById("auth-password").value;
+        if (!email || !pw) { setErr("Email and password required"); return; }
+        if (pw.length < 6) { setErr("Password must be at least 6 characters"); return; }
+        try { await window.fb.signUpPassword(email, pw); }
+        catch (e) { setErr(e.message || "Sign-up failed"); }
+      });
+      document.getElementById("auth-magic").addEventListener("click", async () => {
+        const email = document.getElementById("auth-email").value.trim();
+        if (!email) { setErr("Email required for magic link"); return; }
+        try { await window.fb.sendMagicLink(email); setMsg("Check your email — click the link to sign in."); }
+        catch (e) { setErr(e.message || "Couldn't send link"); }
+      });
+    });
+  })();
+  </script>
   <script src="registry-sync.js"></script>
   <script src="app.js"></script>
 </body>

@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="robots" content="noindex, nofollow" />
+<title>Migrate to Firestore</title>
+<link rel="stylesheet" href="styles.css" />
+<script type="module" src="firebase-client.js"></script>
+<style>
+  body { padding: 24px 20px; }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 10px; }
+  .sub { color: var(--muted, #888); margin-bottom: 18px; font-size: 13px; }
+  .panel { background: var(--panel, #fff); border: 1px solid var(--line, #ddd); border-radius: 8px; padding: 16px; margin-bottom: 14px; }
+  label { display: block; font-size: 12px; color: var(--muted, #888); margin-bottom: 6px; }
+  input[type="password"], input[type="url"] { width: 100%; padding: 8px 10px; border: 1px solid var(--line, #ddd); border-radius: 6px; font-size: 14px; box-sizing: border-box; }
+  button { padding: 8px 16px; background: var(--accent, #4f6dff); color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; }
+  button.ghost { background: transparent; color: var(--text, #111); border: 1px solid var(--line, #ddd); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .log { font-family: ui-monospace, Menlo, monospace; font-size: 12px; background: var(--panel-2, #f5f5f5); border: 1px solid var(--line, #ddd); border-radius: 6px; padding: 10px; min-height: 80px; max-height: 360px; overflow: auto; white-space: pre-wrap; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .ok { color: #2a8b4a; }
+  .err { color: #b12a48; }
+  .signed-out { color: #b12a48; font-style: italic; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Migrate trips to Firestore</h1>
+  <div class="sub">
+    One-time tool. Reads your trips from the Cloudflare Worker (using the owner password) and writes them
+    to Firestore under your signed-in account. Idempotent — safe to re-run.
+  </div>
+
+  <div id="signed-out-msg" class="panel signed-out" hidden>
+    Sign in on the <a href="./">trips page</a> first, then come back here.
+  </div>
+
+  <div id="form" class="panel" hidden>
+    <div style="margin-bottom: 10px;">Signed in as <strong id="who"></strong></div>
+    <label>Cloudflare Worker base URL
+      <input id="worker-url" type="url" value="https://trip-snapshots.daner1231.workers.dev" />
+    </label>
+    <div style="height:8px"></div>
+    <label>Owner password (the one you currently use in the app)
+      <input id="owner-pw" type="password" autocomplete="off" />
+    </label>
+    <div style="height:12px"></div>
+    <div class="row">
+      <button id="run">Run migration</button>
+      <button id="dry" class="ghost">Dry run (count only)</button>
+      <button id="signout-btn" class="ghost">Sign out</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div style="margin-bottom: 6px;"><strong>Log</strong></div>
+    <div id="log" class="log">Awaiting input.</div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const logEl = document.getElementById("log");
+  function log(line, cls) {
+    const span = document.createElement("div");
+    if (cls) span.className = cls;
+    span.textContent = line;
+    if (logEl.textContent === "Awaiting input.") logEl.textContent = "";
+    logEl.appendChild(span);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function whenReady(cb) {
+    if (window.fb) return cb();
+    const iv = setInterval(() => { if (window.fb) { clearInterval(iv); cb(); } }, 30);
+  }
+
+  whenReady(() => {
+    window.fb.onAuth((user) => {
+      document.getElementById("form").hidden = !user;
+      document.getElementById("signed-out-msg").hidden = !!user;
+      if (user) document.getElementById("who").textContent = user.displayName || user.email || user.uid;
+    });
+
+    document.getElementById("signout-btn").addEventListener("click", () => window.fb.signOut());
+
+    async function fetchWorker(base, path, pw) {
+      const res = await fetch(base.replace(/\/$/, "") + path, {
+        headers: pw ? { "Authorization": "Bearer " + pw } : {},
+        cache: "no-cache",
+      });
+      if (!res.ok) throw new Error(`${path} → ${res.status}`);
+      return res.json();
+    }
+
+    async function run({ dryRun }) {
+      const base = document.getElementById("worker-url").value.trim();
+      const pw = document.getElementById("owner-pw").value;
+      if (!base) { log("Worker URL required", "err"); return; }
+      if (!pw)   { log("Owner password required", "err"); return; }
+      document.getElementById("run").disabled = true;
+      document.getElementById("dry").disabled = true;
+      try {
+        let trips;
+        try {
+          log(`Fetching registry from ${base}…`);
+          const registry = await fetchWorker(base, "/registry", pw);
+          trips = Array.isArray(registry) ? registry : (registry.trips || []);
+          log(`Worker registry returned ${trips.length} trips.`);
+        } catch (e) {
+          if (/404/.test(e.message)) {
+            log(`Worker has no registry yet — falling back to your browser's localStorage.`);
+            try {
+              const raw = localStorage.getItem("trip-builder-trips");
+              trips = raw ? JSON.parse(raw) : [];
+            } catch (_) { trips = []; }
+            log(`localStorage registry has ${trips.length} trips.`);
+            if (trips.length === 0) throw new Error("No registry in worker and no trips in localStorage — open the main app once, sign in, and try again.");
+          } else {
+            throw e;
+          }
+        }
+        let ok = 0, fail = 0;
+        for (const t of trips) {
+          const slug = t.slug || t.id;
+          if (!slug) { log(`(skipping entry with no slug/id: ${JSON.stringify(t)})`, "err"); fail++; continue; }
+          try {
+            log(`  → fetching ${slug}…`);
+            const blob = await fetchWorker(base, "/" + encodeURIComponent(slug), pw);
+            // Merge registry-level metadata (name, start, end) into the blob
+            // so the trips list shows it correctly.
+            const merged = {
+              name: t.name || blob.name || "Untitled trip",
+              start: t.start || blob.start || null,
+              end:   t.end   || blob.end   || null,
+              ...blob,
+            };
+            if (dryRun) {
+              log(`     [dry] would write trips/${slug} (${Object.keys(merged).length} fields)`, "ok");
+            } else {
+              const res = await window.fb.saveTrip(slug, merged);
+              if (res.ok) { log(`     saved trips/${slug}`, "ok"); ok++; }
+              else        { log(`     FAILED ${slug}: ${res.error || res.status}`, "err"); fail++; }
+            }
+          } catch (e) {
+            log(`     ERROR on ${slug}: ${e.message}`, "err");
+            fail++;
+          }
+        }
+        log(`Done. ok=${ok} fail=${fail}${dryRun ? " (dry run)" : ""}.`, fail ? "err" : "ok");
+      } catch (e) {
+        log("Fatal: " + e.message, "err");
+      } finally {
+        document.getElementById("run").disabled = false;
+        document.getElementById("dry").disabled = false;
+      }
+    }
+
+    document.getElementById("run").addEventListener("click", () => run({ dryRun: false }));
+    document.getElementById("dry").addEventListener("click", () => run({ dryRun: true }));
+  });
+})();
+</script>
+</body>
+</html>

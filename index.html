@@ -7,6 +7,26 @@
 <title>Trips</title>
 <link rel="stylesheet" href="styles.css" />
 <script src="registry-sync.js"></script>
+<script type="module" src="firebase-client.js"></script>
+<style>
+  /* Auth gate styles */
+  .auth-gate { position: fixed; inset: 0; background: var(--bg, #fff); display: none; align-items: center; justify-content: center; z-index: 9999; }
+  .auth-gate.show { display: flex; }
+  .auth-card { background: var(--panel, #fff); border: 1px solid var(--line, #ddd); border-radius: 10px; padding: 28px 26px; width: min(380px, calc(100vw - 32px)); }
+  .auth-card h1 { margin: 0 0 4px; font-size: 22px; }
+  .auth-card .sub { color: var(--muted, #888); font-size: 13px; margin-bottom: 18px; }
+  .auth-card button.gbtn { width: 100%; padding: 10px; background: var(--accent, #4285f4); color: #fff; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; margin-bottom: 10px; }
+  .auth-card .sep { text-align: center; color: var(--muted, #888); font-size: 12px; margin: 10px 0; }
+  .auth-card input { width: 100%; padding: 8px 10px; border: 1px solid var(--line, #ddd); border-radius: 6px; font-size: 14px; margin-bottom: 8px; box-sizing: border-box; }
+  .auth-card .row-btns { display: flex; gap: 8px; }
+  .auth-card .row-btns button { flex: 1; padding: 8px; border: 1px solid var(--line, #ddd); background: var(--panel-2, #f5f5f5); color: var(--text, #111); border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .auth-card .row-btns button:hover { background: var(--accent, #4285f4); color: #fff; border-color: var(--accent, #4285f4); }
+  .auth-error { color: #b12a48; font-size: 12px; margin-top: 6px; min-height: 16px; }
+  .auth-msg { color: #2a8b4a; font-size: 12px; margin-top: 6px; min-height: 16px; }
+  .user-chip { display: inline-flex; align-items: center; gap: 8px; padding: 4px 10px; background: var(--panel-2, #f5f5f5); border: 1px solid var(--line, #ddd); border-radius: 999px; font-size: 12px; color: var(--muted, #888); }
+  .user-chip button { background: none; border: none; color: var(--muted, #888); cursor: pointer; font-size: 12px; padding: 0; }
+  .user-chip button:hover { color: var(--text, #000); text-decoration: underline; }
+</style>
 <style>
   .trips-wrap { max-width: 880px; margin: 0 auto; padding: 24px 20px; }
   .trips-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 18px; gap: 12px; flex-wrap: wrap; }
@@ -62,7 +82,25 @@
 </style>
 </head>
 <body>
-  <div class="trips-wrap">
+  <div id="auth-gate" class="auth-gate">
+    <div class="auth-card">
+      <h1>Sign in</h1>
+      <div class="sub">Sign in to view and edit your trips.</div>
+      <button class="gbtn" id="auth-google">Continue with Google</button>
+      <div class="sep">— or —</div>
+      <input id="auth-email" type="email" placeholder="you@example.com" autocomplete="email" />
+      <input id="auth-password" type="password" placeholder="Password (optional)" autocomplete="current-password" />
+      <div class="row-btns">
+        <button id="auth-signin">Sign in</button>
+        <button id="auth-signup">Create account</button>
+        <button id="auth-magic">Email me a link</button>
+      </div>
+      <div class="auth-error" id="auth-error"></div>
+      <div class="auth-msg" id="auth-msg"></div>
+    </div>
+  </div>
+
+  <div class="trips-wrap" id="trips-wrap" hidden>
     <div class="trips-head">
       <h1>Trips</h1>
       <div class="trips-head-actions">
@@ -70,6 +108,11 @@
           <button data-view="list" class="active">List</button>
           <button data-view="calendar">Calendar</button>
         </div>
+        <span class="user-chip" id="user-chip" hidden>
+          <span id="user-chip-name"></span>
+          <button id="user-set-password" title="Set or change your password">Set password</button>
+          <button id="user-signout">Sign out</button>
+        </span>
       </div>
     </div>
 
@@ -81,6 +124,11 @@
     </form>
 
     <div id="list-view">
+      <section class="trips-section" id="needs-label-section" hidden>
+        <h2>New invitations</h2>
+        <ul id="needs-label-list" class="trip-list"></ul>
+      </section>
+
       <section class="trips-section">
         <h2>Upcoming &amp; current</h2>
         <ul id="upcoming-list" class="trip-list"></ul>
@@ -91,6 +139,16 @@
         <ul id="past-list" class="trip-list"></ul>
       </section>
 
+      <section class="trips-section" id="watching-section" hidden>
+        <h2 style="display:inline-flex;align-items:center;gap:8px;">
+          Watching
+          <label style="font-size:11px;color:var(--muted);text-transform:none;letter-spacing:0;font-weight:normal;cursor:pointer;display:inline-flex;align-items:center;gap:4px;">
+            color
+            <input type="color" id="watching-color" value="#fffae0" style="width:24px;height:18px;padding:0;border:1px solid var(--line);border-radius:4px;cursor:pointer;" />
+          </label>
+        </h2>
+        <ul id="watching-list" class="trip-list"></ul>
+      </section>
     </div>
 
     <div id="calendar-view" hidden>
@@ -99,17 +157,130 @@
   </div>
 
 <script>
+// --- Auth gate ----------------------------------------------------------
+// Wait for window.fb (from firebase-client.js, loaded as a module) and gate
+// the trips UI behind sign-in. The existing localStorage trip code below
+// keeps running for now — Firestore data sync comes in a follow-up pass.
+(function setupAuthGate() {
+  const gate = document.getElementById("auth-gate");
+  const wrap = document.getElementById("trips-wrap");
+  const chip = document.getElementById("user-chip");
+  const chipName = document.getElementById("user-chip-name");
+  const err = document.getElementById("auth-error");
+  const msg = document.getElementById("auth-msg");
+  const setErr = (t) => { err.textContent = t || ""; msg.textContent = ""; };
+  const setMsg = (t) => { msg.textContent = t || ""; err.textContent = ""; };
+
+  // window.fb is exported by firebase-client.js once the module finishes
+  // loading. Poll briefly until it's available.
+  function whenReady(cb) {
+    if (window.fb) return cb();
+    const iv = setInterval(() => {
+      if (window.fb) { clearInterval(iv); cb(); }
+    }, 30);
+  }
+
+  whenReady(() => {
+    const setPwBtn = document.getElementById("user-set-password");
+    window.fb.onAuth(async (user) => {
+      if (user) {
+        gate.classList.remove("show");
+        wrap.hidden = false;
+        chip.hidden = false;
+        chipName.textContent = user.displayName || user.email || "Signed in";
+        // Hide "Set password" if the user has already chosen one.
+        setPwBtn.hidden = true;
+        try {
+          const has = await window.fb.hasPassword();
+          setPwBtn.hidden = has;
+        } catch (_) { /* leave hidden on failure */ }
+      } else {
+        gate.classList.add("show");
+        wrap.hidden = true;
+        chip.hidden = true;
+      }
+    });
+
+    document.getElementById("auth-google").addEventListener("click", async () => {
+      setErr("");
+      try { await window.fb.signInGoogle(); }
+      catch (e) { setErr(e.message || "Google sign-in failed"); }
+    });
+
+    document.getElementById("auth-signin").addEventListener("click", async () => {
+      const email = document.getElementById("auth-email").value.trim();
+      const pw = document.getElementById("auth-password").value;
+      if (!email || !pw) { setErr("Email and password required"); return; }
+      try { await window.fb.signInPassword(email, pw); }
+      catch (e) { setErr(e.message || "Sign-in failed"); }
+    });
+
+    document.getElementById("auth-signup").addEventListener("click", async () => {
+      const email = document.getElementById("auth-email").value.trim();
+      const pw = document.getElementById("auth-password").value;
+      if (!email || !pw) { setErr("Email and password required"); return; }
+      if (pw.length < 6) { setErr("Password must be at least 6 characters"); return; }
+      try { await window.fb.signUpPassword(email, pw); }
+      catch (e) { setErr(e.message || "Sign-up failed"); }
+    });
+
+    document.getElementById("auth-magic").addEventListener("click", async () => {
+      const email = document.getElementById("auth-email").value.trim();
+      if (!email) { setErr("Email required for magic link"); return; }
+      try {
+        await window.fb.sendMagicLink(email);
+        setMsg("Check your email — click the link to sign in.");
+      } catch (e) { setErr(e.message || "Couldn't send link"); }
+    });
+
+    document.getElementById("user-signout").addEventListener("click", async () => {
+      try { await window.fb.signOut(); }
+      catch (e) { /* ignore */ }
+    });
+
+    document.getElementById("user-set-password").addEventListener("click", async () => {
+      const pw = prompt("Set a new password (min 6 characters). You'll be able to sign in with email + password going forward.");
+      if (pw == null) return;
+      try {
+        await window.fb.setPassword(pw);
+        alert("Password updated. Use 'Sign in' with your email + this password next time.");
+        document.getElementById("user-set-password").hidden = true;
+      } catch (e) {
+        // Firebase requires a recent sign-in for password changes; if so it
+        // throws auth/requires-recent-login. The user has to sign out and
+        // back in to refresh.
+        if (/requires-recent-login/.test(e.code || e.message || "")) {
+          alert("For security, sign out and sign back in (via your email link), then try Set password again.");
+        } else {
+          alert(e.message || "Couldn't set password.");
+        }
+      }
+    });
+  });
+})();
+
 const REGISTRY_KEY = "trip-builder-trips";
 const TRIP_KEY_PREFIX = "trip-builder-trip-";
 const LEGACY_KEY = "trip-builder-v7";
 
+// In-memory mirror of the user's trips, fed live by window.fb.subscribeMyTrips.
+// Shape: [{ id, slug, name, start, end, events?, _role, ownerId, sharedWith }]
+let FS_TRIPS = [];
+let FS_TRIPS_READY = false;
+// Per-user labels on shared trips: { slug: "traveling" | "watching" }.
+let FS_LABELS = {};
+// Per-user watching-cards background color.
+let FS_WATCHING_COLOR = null;
+
 function readRegistry() {
-  try { return JSON.parse(localStorage.getItem(REGISTRY_KEY) || "[]"); }
-  catch (e) { return []; }
+  // Always reflects the signed-in user's Firestore data. No localStorage
+  // fallback — that would leak the previous user's trips on shared devices.
+  return FS_TRIPS;
 }
 function writeRegistry(list) {
+  // Kept only for the legacy + bookend-cleanup migrations below. New code
+  // writes via window.fb.saveTrip / deleteTrip directly.
   localStorage.setItem(REGISTRY_KEY, JSON.stringify(list));
-  window.RegistrySync?.schedulePush();
 }
 function newTripId() {
   return "t" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -225,59 +396,88 @@ function isPast(t) {
 
 function render() {
   const list = readRegistry().filter(t => !isArchive(t));
-  const upcoming = list.filter(t => !isPast(t));
-  const past = list.filter(t => isPast(t));
 
+  // Bucket trips by role + label:
+  //   own trips (owner/editor): mixed into upcoming/past
+  //   shared trips with no label yet: needs-label section
+  //   shared trips labeled "traveling": mixed into upcoming/past
+  //   shared trips labeled "watching": watching section
+  const own = list.filter(t => t._role === "owner" || t._role === "editor");
+  const sharedAll = list.filter(t => t._role === "viewer" || t._role === "viewer-pricing");
+  const needsLabel = sharedAll.filter(t => !FS_LABELS[t.slug || t.id]);
+  const traveling = sharedAll.filter(t => FS_LABELS[t.slug || t.id] === "traveling");
+  const watching = sharedAll.filter(t => FS_LABELS[t.slug || t.id] === "watching");
+
+  const visible = [...own, ...traveling];
+  const upcoming = visible.filter(t => !isPast(t));
+  const past = visible.filter(t => isPast(t));
+
+  const ulNeeds = document.getElementById("needs-label-list");
   const ul1 = document.getElementById("upcoming-list");
   const ul2 = document.getElementById("past-list");
+  const ulWatching = document.getElementById("watching-list");
+  ulNeeds.innerHTML = "";
   ul1.innerHTML = "";
   ul2.innerHTML = "";
+  ulWatching.innerHTML = "";
+  document.getElementById("needs-label-section").hidden = needsLabel.length === 0;
+  document.getElementById("watching-section").hidden = watching.length === 0;
 
   function row(t) {
     const li = document.createElement("li");
     li.className = "trip-card";
     li.dataset.href = tripUrl(t);
+    const isShared = t._role !== "owner" && t._role !== "editor";
+    const isOwn = t._role === "owner";
+    const slug = t.slug || t.id;
+    const label = FS_LABELS[slug] || null;
+    const actions = isOwn
+      ? `<button data-action="rename">Rename</button>
+         <button data-action="delete" class="danger">Delete</button>`
+      : isShared
+        ? `<button data-action="toggle-label" title="Move between Traveling and Watching">
+             ${label === "watching" ? "I'm going" : "Just watching"}
+           </button>`
+        : `<button data-action="leave" class="danger" title="Remove from my list">Hide</button>`;
     li.innerHTML = `
       <div>
         <span class="trip-name"></span>
+        <span class="trip-role-badge" style="margin-left:6px;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;"></span>
         <div class="trip-meta-line"></div>
       </div>
-      <div class="trip-actions">
-        <button data-action="rename">Rename</button>
-        <button data-action="delete" class="danger">Delete</button>
-      </div>
+      <div class="trip-actions">${actions}</div>
     `;
     li.querySelector(".trip-name").textContent = t.name || "Untitled trip";
+    const badge = li.querySelector(".trip-role-badge");
+    if (isShared) badge.textContent = label === "watching" ? "Watching" : (label === "traveling" ? "Shared with me" : "Invited");
+    else if (t._role === "editor") badge.textContent = "Editor";
     li.querySelector(".trip-meta-line").textContent = fmtRange(t);
     li.addEventListener("click", (e) => {
       if (e.target.closest("button")) return;
       window.location.href = li.dataset.href;
     });
-    li.querySelector('[data-action="rename"]').addEventListener("click", () => {
+    li.querySelector('[data-action="rename"]')?.addEventListener("click", async () => {
+      if (t._role !== "owner") { alert("You can only rename trips you own."); return; }
       const next = prompt("Rename trip:", t.name || "");
       if (next == null) return;
-      const all = readRegistry();
-      const i = all.findIndex(x => x.id === t.id);
-      if (i < 0) return;
-      all[i].name = next.trim() || all[i].name;
-      writeRegistry(all);
-      // Keep per-trip blob in sync.
-      try {
-        const raw = localStorage.getItem(TRIP_KEY_PREFIX + t.id);
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          parsed.name = all[i].name;
-          localStorage.setItem(TRIP_KEY_PREFIX + t.id, JSON.stringify(parsed));
-        }
-      } catch (e) { /* ignore */ }
-      render();
+      const name = next.trim();
+      if (!name) return;
+      const res = await window.fb.saveTrip(slug, { name });
+      if (!res.ok) alert(`Rename failed: ${res.error || res.status}`);
+      // No render() call — the subscribeMyTrips listener fires automatically.
     });
-    li.querySelector('[data-action="delete"]').addEventListener("click", () => {
+
+    li.querySelector('[data-action="toggle-label"]')?.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const next = label === "watching" ? "traveling" : "watching";
+      try { await window.fb.setTripLabel(slug, next); }
+      catch (err) { alert(err.message || "Couldn't update label"); }
+    });
+    li.querySelector('[data-action="delete"]')?.addEventListener("click", async () => {
+      if (t._role !== "owner") { alert("You can only delete trips you own."); return; }
       if (!confirm(`Delete "${t.name}"? This can't be undone.`)) return;
-      const all = readRegistry().filter(x => x.id !== t.id);
-      writeRegistry(all);
-      localStorage.removeItem(TRIP_KEY_PREFIX + t.id);
-      render();
+      const res = await window.fb.deleteTrip(slug);
+      if (!res.ok) alert(`Delete failed: ${res.error || res.status}`);
     });
     return li;
   }
@@ -287,6 +487,45 @@ function render() {
 
   if (past.length === 0) ul2.innerHTML = '<li class="empty">No past trips.</li>';
   else past.forEach(t => ul2.appendChild(row(t)));
+
+  watching.forEach(t => {
+    const li = row(t);
+    if (FS_WATCHING_COLOR) li.style.background = FS_WATCHING_COLOR;
+    ulWatching.appendChild(li);
+  });
+
+  // Build the "you've been invited — traveling or watching?" rows.
+  for (const t of needsLabel) {
+    const slug = t.slug || t.id;
+    const li = document.createElement("li");
+    li.className = "trip-card";
+    li.dataset.href = tripUrl(t);
+    li.innerHTML = `
+      <div>
+        <span class="trip-name"></span>
+        <div class="trip-meta-line"></div>
+        <div style="font-size:12px;color:var(--muted);margin-top:4px;">Choose how this trip should appear in your list:</div>
+      </div>
+      <div class="trip-actions">
+        <button data-pick="traveling">I'm going</button>
+        <button data-pick="watching">Just watching</button>
+      </div>
+    `;
+    li.querySelector(".trip-name").textContent = t.name || "Untitled trip";
+    li.querySelector(".trip-meta-line").textContent = fmtRange(t);
+    li.addEventListener("click", (e) => {
+      if (e.target.closest("button")) return;
+      window.location.href = li.dataset.href;
+    });
+    li.querySelectorAll('button[data-pick]').forEach(btn => {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        try { await window.fb.setTripLabel(slug, btn.dataset.pick); }
+        catch (err) { alert(err.message || "Couldn't save choice"); }
+      });
+    });
+    ulNeeds.appendChild(li);
+  }
 }
 
 // --- calendar view ---
@@ -324,6 +563,10 @@ function setView(v) {
 }
 
 function readTripBlob(id) {
+  // For calendar rendering: the live Firestore trip docs already include the
+  // events array (we copy them into FS_TRIPS), so look there first.
+  const t = FS_TRIPS.find(x => x.id === id || x.slug === id);
+  if (t) return t;
   try { return JSON.parse(localStorage.getItem(TRIP_KEY_PREFIX + id) || "null"); }
   catch (e) { return null; }
 }
@@ -565,43 +808,83 @@ document.getElementById("view-toggle").addEventListener("click", (e) => {
   if (!btn) return;
   setView(btn.dataset.view);
 });
-document.getElementById("new-trip-form").addEventListener("submit", (e) => {
+document.getElementById("new-trip-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const name = document.getElementById("nt-name").value.trim();
   const start = document.getElementById("nt-start").value || null;
   const end = document.getElementById("nt-end").value || null;
   if (!name) return;
-  const id = newTripId();
   const list = readRegistry();
   const slug = uniqueSlug(name, new Set(list.map(t => t.slug).filter(Boolean)));
-  const trip = { id, slug, name, start, end };
-  list.push(trip);
-  writeRegistry(list);
-  // Seed the per-trip blob so the editor finds something to load.
-  localStorage.setItem(TRIP_KEY_PREFIX + id, JSON.stringify({
+  const id = newTripId();
+  const blob = {
     name, start, end,
     tzAware: true,
     events: [],
     options: [],
     activeView: "main",
     shrunkDays: [],
-  }));
-  window.location.href = tripUrl(trip);
+  };
+  const res = await window.fb.saveTrip(slug, blob);
+  if (!res.ok) { alert(`Create failed: ${res.error || res.status}`); return; }
+  // Mirror to localStorage so the editor opens immediately (the editor will
+  // also hit Firestore once we refactor it).
+  localStorage.setItem(TRIP_KEY_PREFIX + id, JSON.stringify(blob));
+  window.location.href = tripUrl({ slug });
+});
+
+document.getElementById("watching-color")?.addEventListener("change", async (e) => {
+  const color = e.target.value;
+  try { await window.fb.setWatchingColor(color); }
+  catch (err) { alert(err.message || "Couldn't save color"); }
 });
 
 ensureAllSlugs();
 cleanupBookendsOnce();
-render();
 setView(currentView);
 
-// If we have the owner password on this device, pull the registry from the
-// worker so trips created on other devices show up here too.
+// Subscribe to Firestore once signed in — every trip / label / profile change re-renders.
+let _unsubTrips = null;
+let _unsubLabels = null;
+let _unsubProfile = null;
+(function setupTripsSubscription() {
+  function whenFb(cb) {
+    if (window.fb) return cb();
+    const iv = setInterval(() => { if (window.fb) { clearInterval(iv); cb(); } }, 30);
+  }
+  whenFb(() => {
+    window.fb.onAuth((user) => {
+      if (_unsubTrips) { _unsubTrips(); _unsubTrips = null; }
+      if (_unsubLabels) { _unsubLabels(); _unsubLabels = null; }
+      if (_unsubProfile) { _unsubProfile(); _unsubProfile = null; }
+      if (!user) { FS_TRIPS = []; FS_LABELS = {}; FS_WATCHING_COLOR = null; render(); return; }
+      _unsubTrips = window.fb.subscribeMyTrips((trips) => {
+        FS_TRIPS = trips;
+        render();
+        if (currentView === "calendar") renderCalendar();
+      });
+      _unsubLabels = window.fb.subscribeMyTripLabels((labels) => {
+        FS_LABELS = labels;
+        render();
+      });
+      _unsubProfile = window.fb.subscribeMyProfile((profile) => {
+        FS_WATCHING_COLOR = profile.watchingColor || null;
+        const picker = document.getElementById("watching-color");
+        if (picker && FS_WATCHING_COLOR) picker.value = FS_WATCHING_COLOR;
+        render();
+      });
+    });
+  });
+})();
+
+// Disabled — was a remnant of the old worker-backed registry sync.
 (async function syncRegistryOnLoad() {
-  if (!window.RegistrySync) return;
-  const res = await window.RegistrySync.pullAndMerge();
-  if (res?.changed) {
-    render();
-    if (currentView === "calendar") renderCalendar();
+  if (false && window.RegistrySync) {
+    const res = await window.RegistrySync.pullAndMerge();
+    if (res?.changed) {
+      render();
+      if (currentView === "calendar") renderCalendar();
+    }
   }
 })();
 </script>
