@@ -6,7 +6,6 @@
 <meta name="robots" content="noindex, nofollow" />
 <title>Trips</title>
 <link rel="stylesheet" href="styles.css" />
-<script src="registry-sync.js"></script>
 <script type="module" src="firebase-client.js"></script>
 <style>
   /* Auth gate styles */
@@ -79,6 +78,7 @@
   .cal-trip.bg-grey    { background: #b9bec7; }
   .cal-trip.bg-accent  { background: var(--accent); }
   .cal-trip.cal-spacer { background: transparent; pointer-events: none; }
+  .cal-month-banner { grid-column: 1 / -1; background: var(--panel-2); color: var(--text); font-weight: 600; padding: 8px 12px; font-size: 13px; }
 </style>
 </head>
 <body>
@@ -100,6 +100,25 @@
     </div>
   </div>
 
+  <header class="app-header" id="app-header" hidden>
+    <a class="app-header-brand" href="./" title="myitin — home">
+      <span class="app-header-brand-mark">m</span>
+      <span>myitin</span>
+    </a>
+    <div class="app-header-user" style="display:inline-flex;align-items:center;gap:14px;">
+      <a href="wallet.html" class="app-header-brand" style="font-size:14px;" title="Travel wallet — frequent flyer, Global Entry, passports">Wallet</a>
+      <button id="app-user-btn" class="app-user-btn" type="button" aria-haspopup="true" aria-expanded="false">
+        <span class="app-user-initial" id="app-user-initial">?</span>
+        <span class="app-user-name" id="app-user-name">Signed in</span>
+        <span class="app-user-caret">▾</span>
+      </button>
+      <div class="app-user-menu" id="app-user-menu" hidden>
+        <button id="app-user-set-password" type="button">Set password</button>
+        <button id="app-user-signout" type="button">Sign out</button>
+      </div>
+    </div>
+  </header>
+
   <div class="trips-wrap" id="trips-wrap" hidden>
     <div class="trips-head">
       <h1>Trips</h1>
@@ -108,11 +127,6 @@
           <button data-view="list" class="active">List</button>
           <button data-view="calendar">Calendar</button>
         </div>
-        <span class="user-chip" id="user-chip" hidden>
-          <span id="user-chip-name"></span>
-          <button id="user-set-password" title="Set or change your password">Set password</button>
-          <button id="user-signout">Sign out</button>
-        </span>
       </div>
     </div>
 
@@ -164,8 +178,9 @@
 (function setupAuthGate() {
   const gate = document.getElementById("auth-gate");
   const wrap = document.getElementById("trips-wrap");
-  const chip = document.getElementById("user-chip");
-  const chipName = document.getElementById("user-chip-name");
+  const header = document.getElementById("app-header");
+  const userName = document.getElementById("app-user-name");
+  const userInitial = document.getElementById("app-user-initial");
   const err = document.getElementById("auth-error");
   const msg = document.getElementById("auth-msg");
   const setErr = (t) => { err.textContent = t || ""; msg.textContent = ""; };
@@ -181,13 +196,30 @@
   }
 
   whenReady(() => {
-    const setPwBtn = document.getElementById("user-set-password");
+    const setPwBtn = document.getElementById("app-user-set-password");
+    const menuBtn = document.getElementById("app-user-btn");
+    const menu = document.getElementById("app-user-menu");
+    menuBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const open = menu.hidden;
+      menu.hidden = !open;
+      menuBtn.setAttribute("aria-expanded", String(open));
+    });
+    document.addEventListener("click", (e) => {
+      if (menu.hidden) return;
+      if (e.target.closest("#app-user-menu") || e.target.closest("#app-user-btn")) return;
+      menu.hidden = true;
+      menuBtn.setAttribute("aria-expanded", "false");
+    });
+
     window.fb.onAuth(async (user) => {
       if (user) {
         gate.classList.remove("show");
         wrap.hidden = false;
-        chip.hidden = false;
-        chipName.textContent = user.displayName || user.email || "Signed in";
+        header.hidden = false;
+        const label = user.displayName || user.email || "Signed in";
+        userName.textContent = label;
+        userInitial.textContent = (label[0] || "?");
         // Hide "Set password" if the user has already chosen one.
         setPwBtn.hidden = true;
         try {
@@ -197,7 +229,7 @@
       } else {
         gate.classList.add("show");
         wrap.hidden = true;
-        chip.hidden = true;
+        header.hidden = true;
       }
     });
 
@@ -233,18 +265,18 @@
       } catch (e) { setErr(e.message || "Couldn't send link"); }
     });
 
-    document.getElementById("user-signout").addEventListener("click", async () => {
+    document.getElementById("app-user-signout").addEventListener("click", async () => {
       try { await window.fb.signOut(); }
       catch (e) { /* ignore */ }
     });
 
-    document.getElementById("user-set-password").addEventListener("click", async () => {
+    document.getElementById("app-user-set-password").addEventListener("click", async () => {
       const pw = prompt("Set a new password (min 6 characters). You'll be able to sign in with email + password going forward.");
       if (pw == null) return;
       try {
         await window.fb.setPassword(pw);
         alert("Password updated. Use 'Sign in' with your email + this password next time.");
-        document.getElementById("user-set-password").hidden = true;
+        document.getElementById("app-user-set-password").hidden = true;
       } catch (e) {
         // Firebase requires a recent sign-in for password changes; if so it
         // throws auth/requires-recent-login. The user has to sign out and
@@ -600,24 +632,142 @@ function renderCalendar() {
     tripFlights[t.id] = packFlightsIntoRows(flights);
   });
 
-  const monthSet = new Set();
+  // Continuous calendar — single grid spanning the earliest trip month to the
+  // latest, with a full-width "Month Year" banner row inserted before each
+  // new month's first week.
+  let earliest = null;
+  let latest = null;
   trips.forEach(t => {
     const s = parseISO(t.start);
     const e = parseISO(t.end);
-    let cur = new Date(s.getFullYear(), s.getMonth(), 1);
-    const last = new Date(e.getFullYear(), e.getMonth(), 1);
-    while (cur <= last) {
-      monthSet.add(`${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, "0")}`);
-      cur = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
+    if (!earliest || s < earliest) earliest = s;
+    if (!latest || e > latest) latest = e;
+  });
+  const rangeStart = new Date(earliest.getFullYear(), earliest.getMonth(), 1);
+  const rangeEndMonth = new Date(latest.getFullYear(), latest.getMonth() + 1, 0);
+  const gridStart = addDays(rangeStart, -rangeStart.getDay());
+  const gridEnd = addDays(rangeEndMonth, 6 - rangeEndMonth.getDay());
+
+  const wrap = document.createElement("div");
+  wrap.className = "calendar-wrap";
+
+  const grid = document.createElement("div");
+  grid.className = "cal-grid";
+  ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].forEach(d => {
+    const h = document.createElement("div");
+    h.className = "cal-dow";
+    h.textContent = d;
+    grid.appendChild(h);
+  });
+
+  const today = new Date();
+  let prevMonth = null;
+  let weekBuffer = [];
+  let weekHasNewMonth = null;
+
+  function flushWeek() {
+    if (weekHasNewMonth !== null) {
+      const banner = document.createElement("div");
+      banner.className = "cal-month-banner";
+      banner.textContent = weekHasNewMonth.toLocaleString(undefined, { month: "long", year: "numeric" });
+      grid.appendChild(banner);
     }
-  });
+    weekBuffer.forEach(c => grid.appendChild(c));
+    weekBuffer = [];
+    weekHasNewMonth = null;
+  }
 
-  const months = [...monthSet].sort().map(s => {
-    const [y, m] = s.split("-").map(Number);
-    return new Date(y, m - 1, 1);
-  });
+  for (let day = new Date(gridStart); day <= gridEnd; day = addDays(day, 1)) {
+    const inRange = day >= rangeStart && day <= rangeEndMonth;
+    const cell = buildCalDayCell(day, inRange, today, trips, tripLocations, tripFlights);
+    if (inRange && day.getMonth() !== prevMonth) {
+      weekHasNewMonth = new Date(day);
+      prevMonth = day.getMonth();
+    }
+    weekBuffer.push(cell);
+    if (day.getDay() === 6) flushWeek();
+  }
+  flushWeek();
 
-  months.forEach(monthDate => container.appendChild(renderMonth(monthDate, trips, tripLocations, tripFlights)));
+  wrap.appendChild(grid);
+  container.appendChild(wrap);
+}
+
+function buildCalDayCell(day, inRange, today, trips, tripLocations, tripFlights) {
+  const cell = document.createElement("div");
+  cell.className = "cal-day";
+  if (!inRange) {
+    cell.classList.add("other-month");
+    return cell;
+  }
+  if (sameDay(day, today)) cell.classList.add("today");
+
+  const num = document.createElement("span");
+  num.className = "cal-day-num";
+  num.textContent = day.getDate();
+  cell.appendChild(num);
+
+  const dayISO = fmtISO(day);
+  const dow = day.getDay();
+  trips.forEach(t => {
+    if (dayISO < t.start || dayISO > t.end) return;
+    const isWeekStart = dow === 0;
+    const locs = (tripLocations[t.id] || []).filter(e => dayISO >= e.start && dayISO <= e.end);
+    const flightsToday = (tripFlights[t.id] || []).filter(e => dayISO >= e.start && dayISO <= e.end);
+
+    let items;
+    if (flightsToday.length > 0) {
+      const maxRow = Math.max(...flightsToday.map(e => e._row || 0));
+      items = [];
+      for (let r = 0; r <= maxRow; r++) {
+        const f = flightsToday.find(e => (e._row || 0) === r);
+        if (f) {
+          const codes = extractFlightCodes(f.title);
+          const label = codes ? `${codes.from}–${codes.to}` : (f.title || "Flight");
+          items.push({
+            label, start: f.start, end: f.end,
+            color: f.color || "indigo",
+            href: tripUrl(t),
+            tooltip: `${f.title} — ${t.name}`,
+          });
+        } else {
+          items.push({ _spacer: true });
+        }
+      }
+    } else if (locs.length > 0) {
+      items = locs.map(e => ({
+        label: e.title, start: e.start, end: e.end,
+        color: e.color || "violet",
+        href: tripUrl(t),
+        tooltip: `${e.title} — ${t.name} (${e.start}${e.end !== e.start ? ` → ${e.end}` : ""})`,
+      }));
+    } else {
+      items = [{
+        label: t.name || "Untitled", start: t.start, end: t.end,
+        color: "accent",
+        href: tripUrl(t),
+        tooltip: `${t.name || "Untitled"} (${t.start} → ${t.end})`,
+      }];
+    }
+
+    items.forEach(item => {
+      if (item._spacer) {
+        const sp = document.createElement("div");
+        sp.className = "cal-trip cal-spacer";
+        cell.appendChild(sp);
+        return;
+      }
+      const bar = document.createElement("a");
+      bar.className = `cal-trip ${colorClass(item.color)}`;
+      bar.href = item.href;
+      bar.textContent = item.label;
+      bar.title = item.tooltip;
+      if (dayISO !== item.start && !isWeekStart) bar.classList.add("continued");
+      if (dayISO !== item.end && dow !== 6) bar.classList.add("continues");
+      cell.appendChild(bar);
+    });
+  });
+  return cell;
 }
 
 // Assign each flight a stable row index so a flight stays on the same row
@@ -686,122 +836,6 @@ function colorClass(c) {
   return KNOWN_COLORS.has(c) ? `bg-${c}` : "bg-accent";
 }
 
-function renderMonth(monthDate, trips, tripLocations, tripFlights) {
-  const year = monthDate.getFullYear();
-  const month = monthDate.getMonth();
-  const today = new Date();
-
-  const wrap = document.createElement("div");
-  wrap.className = "calendar-wrap";
-  const title = document.createElement("h3");
-  title.className = "cal-month-title";
-  title.textContent = monthDate.toLocaleString(undefined, { month: "long", year: "numeric" });
-  wrap.appendChild(title);
-
-  const grid = document.createElement("div");
-  grid.className = "cal-grid";
-
-  ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].forEach(d => {
-    const h = document.createElement("div");
-    h.className = "cal-dow";
-    h.textContent = d;
-    grid.appendChild(h);
-  });
-
-  const firstOfMonth = new Date(year, month, 1);
-  const gridStart = addDays(firstOfMonth, -firstOfMonth.getDay());
-
-  for (let i = 0; i < 42; i++) {
-    const day = addDays(gridStart, i);
-    const cell = document.createElement("div");
-    cell.className = "cal-day";
-    if (day.getMonth() !== month) cell.classList.add("other-month");
-    if (sameDay(day, today)) cell.classList.add("today");
-
-    const num = document.createElement("span");
-    num.className = "cal-day-num";
-    num.textContent = day.getDate();
-    cell.appendChild(num);
-
-    const dayISO = fmtISO(day);
-    const dow = day.getDay();
-    trips.forEach(t => {
-      if (dayISO < t.start || dayISO > t.end) return;
-      const isWeekStart = dow === 0;
-      const locs = (tripLocations[t.id] || []).filter(e => dayISO >= e.start && dayISO <= e.end);
-      const flightsToday = (tripFlights[t.id] || []).filter(e => dayISO >= e.start && dayISO <= e.end);
-
-      // Preferred labels in order: flights that touch this day rendered at
-      // their stable row index (with empty-row spacers so a flight stays in
-      // the same vertical position across all its days), then "Where"
-      // events, then a trip-name fallback so the trip is still visible on
-      // bare days.
-      let items;
-      if (flightsToday.length > 0) {
-        const maxRow = Math.max(...flightsToday.map(e => e._row || 0));
-        items = [];
-        for (let r = 0; r <= maxRow; r++) {
-          const f = flightsToday.find(e => (e._row || 0) === r);
-          if (f) {
-            const codes = extractFlightCodes(f.title);
-            const label = codes ? `${codes.from}–${codes.to}` : (f.title || "Flight");
-            items.push({
-              label,
-              start: f.start,
-              end: f.end,
-              color: f.color || "indigo",
-              href: tripUrl(t),
-              tooltip: `${f.title} — ${t.name}`,
-            });
-          } else {
-            items.push({ _spacer: true });
-          }
-        }
-      } else if (locs.length > 0) {
-        items = locs.map(e => ({
-          label: e.title,
-          start: e.start,
-          end: e.end,
-          color: e.color || "violet",
-          href: tripUrl(t),
-          tooltip: `${e.title} — ${t.name} (${e.start}${e.end !== e.start ? ` → ${e.end}` : ""})`,
-        }));
-      } else {
-        items = [{
-          label: t.name || "Untitled",
-          start: t.start,
-          end: t.end,
-          color: "accent",
-          href: tripUrl(t),
-          tooltip: `${t.name || "Untitled"} (${t.start} → ${t.end})`,
-        }];
-      }
-
-      items.forEach(item => {
-        if (item._spacer) {
-          // Reserve vertical slot so the flight below stays at its row.
-          const sp = document.createElement("div");
-          sp.className = "cal-trip cal-spacer";
-          cell.appendChild(sp);
-          return;
-        }
-        const bar = document.createElement("a");
-        bar.className = `cal-trip ${colorClass(item.color)}`;
-        bar.href = item.href;
-        bar.textContent = item.label;
-        bar.title = item.tooltip;
-        if (dayISO !== item.start && !isWeekStart) bar.classList.add("continued");
-        if (dayISO !== item.end && dow !== 6) bar.classList.add("continues");
-        cell.appendChild(bar);
-      });
-    });
-
-    grid.appendChild(cell);
-  }
-
-  wrap.appendChild(grid);
-  return wrap;
-}
 
 document.getElementById("view-toggle").addEventListener("click", (e) => {
   const btn = e.target.closest("button[data-view]");
@@ -877,16 +911,6 @@ let _unsubProfile = null;
   });
 })();
 
-// Disabled — was a remnant of the old worker-backed registry sync.
-(async function syncRegistryOnLoad() {
-  if (false && window.RegistrySync) {
-    const res = await window.RegistrySync.pullAndMerge();
-    if (res?.changed) {
-      render();
-      if (currentView === "calendar") renderCalendar();
-    }
-  }
-})();
 </script>
 </body>
 </html>

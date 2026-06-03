@@ -21,6 +21,8 @@ import {
   collection, query, where, orderBy, onSnapshot, getDocs,
   serverTimestamp, arrayUnion, arrayRemove, deleteField,
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
+import { getFunctions, httpsCallable }
+  from "https://www.gstatic.com/firebasejs/10.13.2/firebase-functions.js";
 
 // --- CONFIG ---------------------------------------------------------------
 // Paste the firebaseConfig object from the Firebase console below.
@@ -37,6 +39,8 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
+const functions = getFunctions(app, "us-central1");
+const smartParseCallable = httpsCallable(functions, "smartParse");
 
 // --- AUTH ----------------------------------------------------------------
 
@@ -512,6 +516,26 @@ async function setTripLabel(slug, label) {
   await setDoc(doc(db, "userTripLabels", currentUser.uid), update, { merge: true });
 }
 
+// --- TRAVEL WALLET -------------------------------------------------------
+//
+// Private per-user store of sensitive travel docs (frequent-flyer numbers,
+// Known Traveler / Global Entry, driver's licenses, passports). Lives at
+// wallet/{uid} and is readable/writable only by that user — never shared or
+// mirrored anywhere.
+
+function subscribeMyWallet(cb) {
+  if (!currentUser) { cb({}); return () => {}; }
+  return onSnapshot(doc(db, "wallet", currentUser.uid), (snap) => {
+    cb(snap.exists() ? (snap.data() || {}) : {});
+  }, (err) => { console.error("subscribeMyWallet error:", err); cb({}); });
+}
+
+async function saveWallet(data) {
+  if (!currentUser) throw new Error("not signed in");
+  await setDoc(doc(db, "wallet", currentUser.uid),
+    { ...data, updatedAt: serverTimestamp() }, { merge: true });
+}
+
 // --- EXPORT --------------------------------------------------------------
 
 window.fb = {
@@ -521,6 +545,12 @@ window.fb = {
   setPassword, hasPassword,
   get user() { return currentUser; },
   whenAuthReady() { return authReadyPromise; },
+  // Smart-parse via Firebase Cloud Function. Auth is automatic (the callable
+  // SDK attaches the caller's ID token and the function checks it).
+  smartParse: async (data) => {
+    const res = await smartParseCallable(data);
+    return res.data;
+  },
   // data
   loadTrip, saveTrip, deleteTrip,
   subscribeMyTrips, subscribeTrip,
@@ -536,6 +566,8 @@ window.fb = {
   subscribeMyTripLabels, setTripLabel,
   // user profile (watching color etc.)
   subscribeMyProfile, setWatchingColor,
+  // private travel wallet
+  subscribeMyWallet, saveWallet,
 };
 
 // Kick off magic-link completion automatically on every page load.

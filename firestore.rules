@@ -63,6 +63,14 @@ service cloud.firestore {
       allow read, write: if isSignedIn() && request.auth.uid == uid;
     }
 
+    // ---- wallet/{uid} ----
+    // Private travel wallet: frequent-flyer numbers, Known Traveler / Global
+    // Entry, driver's licenses, passports. Highly sensitive — only the user
+    // themselves can ever read or write it. Never shared, never mirrored.
+    match /wallet/{uid} {
+      allow read, write: if isSignedIn() && request.auth.uid == uid;
+    }
+
     // ---- userEmails/{normalized-email} ----
     // Email → uid lookup so the owner can share trips by typing an email.
     // Any signed-in user can read (we need to look up other people's uids).

@@ -1,0 +1,1842 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="robots" content="noindex, nofollow" />
+<title>Wallet</title>
+<link rel="stylesheet" href="styles.css" />
+<script type="module" src="firebase-client.js"></script>
+<style>
+  /* Auth gate styles (shared with index.html) */
+  .auth-gate { position: fixed; inset: 0; background: var(--bg, #fff); display: none; align-items: center; justify-content: center; z-index: 9999; }
+  .auth-gate.show { display: flex; }
+  .auth-card { background: var(--panel, #fff); border: 1px solid var(--line, #ddd); border-radius: 10px; padding: 28px 26px; width: min(380px, calc(100vw - 32px)); }
+  .auth-card h1 { margin: 0 0 4px; font-size: 22px; }
+  .auth-card .sub { color: var(--muted, #888); font-size: 13px; margin-bottom: 18px; }
+  .auth-card button.gbtn { width: 100%; padding: 10px; background: var(--accent, #4285f4); color: #fff; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; margin-bottom: 10px; }
+  .auth-card .sep { text-align: center; color: var(--muted, #888); font-size: 12px; margin: 10px 0; }
+  .auth-card input { width: 100%; padding: 8px 10px; border: 1px solid var(--line, #ddd); border-radius: 6px; font-size: 14px; margin-bottom: 8px; box-sizing: border-box; }
+  .auth-card .row-btns { display: flex; gap: 8px; }
+  .auth-card .row-btns button { flex: 1; padding: 8px; border: 1px solid var(--line, #ddd); background: var(--panel-2, #f5f5f5); color: var(--text, #111); border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .auth-card .row-btns button:hover { background: var(--accent, #4285f4); color: #fff; border-color: var(--accent, #4285f4); }
+  .auth-error { color: #b12a48; font-size: 12px; margin-top: 6px; min-height: 16px; }
+  .auth-msg { color: #2a8b4a; font-size: 12px; margin-top: 6px; min-height: 16px; }
+
+  .wallet-wrap { max-width: 880px; margin: 0 auto; padding: 24px 20px 80px; }
+  .wallet-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+  .wallet-head h1 { margin: 0; font-size: 22px; }
+  .wallet-intro { color: var(--muted); font-size: 13px; margin: 0 0 8px; max-width: 620px; }
+  .wallet-status { font-size: 12px; color: var(--muted); min-height: 16px; margin-bottom: 18px; }
+  .wallet-status.saving { color: var(--accent); }
+  .wallet-status.saved { color: var(--emerald-rim, #047a52); }
+
+  .wallet-nav { position: sticky; top: 49px; z-index: 10; display: flex; gap: 4px; background: var(--panel); border-bottom: 1px solid var(--line); padding: 0 20px; margin: 0 -20px 22px; overflow-x: auto; scrollbar-width: none; }
+  .wallet-nav::-webkit-scrollbar { display: none; }
+  .wallet-nav button { background: transparent; color: var(--muted); border: none; border-radius: 0; padding: 12px 16px; font-size: 13px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; flex: 0 0 auto; }
+  .wallet-nav button:hover { color: var(--text); }
+  .wallet-nav button.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  .people-bar { border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); padding: 12px 14px; margin-bottom: 24px; }
+  .people-bar-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+  .people-bar-head h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 0; }
+  .people-bar-hint { font-size: 12px; color: var(--muted); margin-left: auto; }
+  .people-chips { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .person-chip { display: inline-flex; align-items: center; gap: 6px; background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 4px 6px 4px 10px; }
+  .person-chip input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; margin: 0; }
+  .person-chip input[type=text] { border: none; background: transparent; font-size: 13px; color: var(--text); width: 96px; padding: 2px 0; }
+  .person-chip input[type=text]:focus { outline: none; }
+  .person-chip .px { border: none; background: transparent; color: var(--muted); cursor: pointer; font-size: 15px; line-height: 1; padding: 0 4px; border-radius: 4px; }
+  .person-chip .px:hover { color: #b12a48; }
+  .person-chip.is-hidden { opacity: 0.45; }
+  .people-link { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 12px; padding: 2px 4px; }
+  .people-link:hover { text-decoration: underline; }
+  .present-btn { display: block; margin-top: 12px; background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .present-btn:hover { filter: brightness(1.05); }
+  .present-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  .present-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.45); display: flex; align-items: center; justify-content: center; z-index: 9998; padding: 16px; }
+  .present-overlay[hidden] { display: none; }
+  .present-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 22px 22px 18px; width: min(460px, 100%); max-height: calc(100vh - 48px); overflow: auto; }
+  .present-card h2 { margin: 0 0 4px; font-size: 18px; }
+  .present-card .psub { color: var(--muted); font-size: 13px; margin-bottom: 6px; }
+  .present-step-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 16px 0 8px; }
+  .cred-choices { display: flex; flex-wrap: wrap; gap: 8px; }
+  .cred-choice { border: 1px solid var(--line); background: var(--panel-2); color: var(--text); border-radius: 8px; padding: 8px 14px; cursor: pointer; font-size: 13px; }
+  .cred-choice:hover { border-color: var(--accent); }
+  .cred-choice.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .present-select { width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 14px; background: var(--bg); color: var(--text); }
+  .present-select:focus { outline: none; border-color: var(--accent); }
+
+  .person-name-btn { background: transparent; border: none; font-size: 13px; color: var(--text); cursor: pointer; padding: 2px 2px 2px 4px; font: inherit; }
+  .person-name-btn:hover { color: var(--accent); text-decoration: underline; }
+  .pd-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+  .pd-name { flex: 1; font-size: 19px; font-weight: 700; padding: 6px 8px; border: 1px solid transparent; border-radius: 6px; background: var(--bg); color: var(--text); }
+  .pd-name:hover { border-color: var(--line); }
+  .pd-name:focus { outline: none; border-color: var(--accent); }
+  .pd-close { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 9px 18px; font-size: 14px; font-weight: 600; cursor: pointer; }
+  .pd-sub { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+  .pd-section-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 16px 0 8px; }
+  .pd-cred { border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); padding: 10px 12px; margin-bottom: 8px; }
+  .pd-cg { font-weight: 700; font-size: 14px; }
+  .pd-cnum { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: 0.02em; margin-top: 2px; }
+  .pd-cmeta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .pd-cmeta .expiry-warn { color: #b12a48; }
+  .pd-cmeta .expiry-soon { color: var(--amber-rim, #a96904); }
+  .pd-empty { color: var(--muted); font-style: italic; font-size: 13px; }
+  .pd-remove { background: none; border: none; color: #b12a48; cursor: pointer; font-size: 12px; padding: 4px 0; margin-top: 14px; }
+  .pd-remove:hover { text-decoration: underline; }
+  .name-choices { display: flex; flex-direction: column; gap: 4px; }
+  .name-choice { display: flex; align-items: center; gap: 9px; font-size: 14px; padding: 5px 4px; cursor: pointer; }
+  .name-choice input { width: 16px; height: 16px; accent-color: var(--accent); margin: 0; }
+  .name-choice .nc-count { color: var(--muted); font-size: 12px; }
+  .present-empty-note { color: var(--muted); font-style: italic; font-size: 13px; }
+  .present-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+  .present-show { background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 9px 22px; font-size: 14px; font-weight: 600; cursor: pointer; }
+  .present-show:disabled { opacity: 0.45; cursor: not-allowed; }
+  .wallet-field select { padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; font-size: 14px; background: var(--bg); color: var(--text); }
+  .wallet-field select:focus { outline: none; border-color: var(--accent); }
+  .person-pill { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; }
+
+  .wallet-section { margin-bottom: 26px; }
+  .wallet-section-head { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; }
+  .wallet-section-head h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 0; }
+  .wallet-section-head .count { font-size: 11px; color: var(--muted); }
+
+  .wallet-cards { display: flex; flex-direction: column; gap: 10px; }
+  .wallet-card { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 12px 12px 6px; position: relative; }
+  .wallet-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px 12px; }
+  .wallet-field { display: flex; flex-direction: column; gap: 4px; }
+  .wallet-field.wide { grid-column: 1 / -1; }
+  .wallet-field label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+  .wallet-field input { padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; font-size: 14px; background: var(--bg); color: var(--text); }
+  .wallet-field input:focus { outline: none; border-color: var(--accent); }
+  .wallet-field-num { display: flex; gap: 6px; }
+  .wallet-field-num input { flex: 1; font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }
+  .icon-btn { border: 1px solid var(--line); background: var(--panel-2); color: var(--muted); border-radius: 6px; padding: 0 10px; cursor: pointer; font-size: 12px; display: inline-flex; align-items: center; justify-content: center; }
+  .icon-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .icon-btn svg { display: block; }
+  .card-remove { position: absolute; top: 8px; right: 8px; border: none; background: transparent; color: var(--muted); cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 6px; border-radius: 4px; }
+  .card-remove:hover { color: #b12a48; background: var(--panel-2); }
+  .wallet-card.editing { border-color: var(--accent); }
+  .wallet-card.flash { animation: cardflash 1.1s ease-out; }
+  @keyframes cardflash {
+    0% { box-shadow: 0 0 0 2px rgba(52,211,153,0.55); border-color: #34d399; }
+    100% { box-shadow: 0 0 0 2px rgba(52,211,153,0); }
+  }
+  .card-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 8px 0 6px; margin-top: 2px; }
+  .btn-save { background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 8px 18px; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .btn-save:hover { filter: brightness(1.05); }
+  .btn-cancel { background: transparent; border: 1px solid var(--line); color: var(--muted); border-radius: 6px; padding: 8px 14px; font-size: 13px; cursor: pointer; }
+  .btn-cancel:hover { border-color: var(--accent); color: var(--accent); }
+
+  .wallet-card.committed { padding: 12px 14px; }
+  .card-summary { display: flex; flex-direction: column; gap: 8px; padding-right: 30px; }
+  .summary-title { font-size: 15px; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .summary-rows { display: flex; flex-wrap: wrap; gap: 6px 20px; }
+  .summary-item { font-size: 13px; color: var(--text); display: inline-flex; gap: 6px; align-items: center; }
+  .summary-item .k { color: var(--muted); }
+  .summary-item .v { font-variant-numeric: tabular-nums; }
+  .summary-item .icon-btn { padding: 0 7px; }
+  .card-foot { display: flex; justify-content: flex-end; margin-top: 10px; }
+  .btn-edit { background: var(--panel-2); border: 1px solid var(--line); color: var(--text); border-radius: 6px; padding: 6px 16px; font-size: 13px; cursor: pointer; }
+  .btn-edit:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* Second-level tab strip — same look as the main nav, slightly lighter. */
+  .wallet-subnav { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin: 0 0 16px; overflow-x: auto; scrollbar-width: none; }
+  .wallet-subnav::-webkit-scrollbar { display: none; }
+  .wallet-subnav button { background: transparent; color: var(--muted); border: none; border-radius: 0; padding: 9px 14px; font-size: 13px; font-weight: 600; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; flex: 0 0 auto; }
+  .wallet-subnav button:hover { color: var(--text); }
+  .wallet-subnav button.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .wallet-subnav .subnav-add { color: var(--muted); font-weight: 400; font-size: 16px; padding: 6px 12px; }
+  .wallet-subnav .subnav-count { font-weight: 400; color: var(--muted); margin-left: 6px; font-size: 12px; }
+
+  .content-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+  .content-toolbar .ct-title { font-size: 15px; font-weight: 700; color: var(--text); }
+  .group-add { background: transparent; border: 1px solid var(--line); color: var(--muted); border-radius: 6px; padding: 6px 12px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+  .group-add:hover { border-color: var(--accent); color: var(--accent); }
+  .toolbar-right { display: inline-flex; align-items: center; gap: 10px; }
+  .login-control { display: inline-flex; align-items: center; gap: 4px; }
+  .login-link { color: var(--accent); text-decoration: none; font-size: 13px; font-weight: 600; white-space: nowrap; }
+  .login-link:hover { text-decoration: underline; }
+  .login-edit { border: none; background: transparent; color: var(--muted); cursor: pointer; font-size: 12px; padding: 2px 4px; }
+  .login-edit:hover { color: var(--accent); }
+
+  .entry-list { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); overflow: hidden; }
+  .entry-row { display: flex; align-items: center; gap: 12px; padding: 11px 14px; border-bottom: 1px solid var(--line); }
+  .entry-row:last-child { border-bottom: none; }
+  .entry-person { font-weight: 600; color: var(--text); min-width: 110px; }
+  .entry-person.unassigned { color: var(--muted); font-weight: 400; font-style: italic; }
+  .entry-detail { font-variant-numeric: tabular-nums; letter-spacing: 0.02em; color: var(--text); }
+  .entry-meta { color: var(--muted); font-size: 12px; }
+  .entry-money, .pd-cmeta .money, .summary .money { color: #15803d; font-weight: 700; font-size: 14px; }
+  .entry-stack { display: inline-flex; flex-direction: column; line-height: 1.25; }
+  .entry-stack .es-sub { font-size: 11px; color: var(--muted); }
+  .entry-actions { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+  .entry-edit { background: transparent; border: 1px solid var(--line); color: var(--muted); border-radius: 6px; padding: 4px 12px; font-size: 12px; cursor: pointer; }
+  .entry-edit:hover { border-color: var(--accent); color: var(--accent); }
+  .drag-handle { cursor: grab; color: var(--muted); padding: 0 2px 0 4px; user-select: none; font-size: 14px; flex: 0 0 auto; }
+  .drag-handle:hover { color: var(--text); }
+  .entry-row.dragging { opacity: 0.45; }
+  .entry-row.drop-before { box-shadow: inset 0 2px 0 0 var(--accent); }
+  .entry-row.drop-after { box-shadow: inset 0 -2px 0 0 var(--accent); }
+  .entry-copy { background: transparent; border: 1px solid var(--line); color: var(--muted); border-radius: 6px; padding: 4px 8px; cursor: pointer; display: inline-flex; align-items: center; }
+  .entry-copy:hover { border-color: var(--accent); color: var(--accent); }
+  .entry-copy svg { display: block; }
+  .entry-x { border: none; background: transparent; color: var(--muted); cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 6px; border-radius: 4px; }
+  .entry-x:hover { color: #b12a48; background: var(--panel-2); }
+  /* An entry being edited expands inline to a full card inside the list. */
+  .entry-list .wallet-card { border: none; border-bottom: 1px solid var(--line); border-radius: 0; }
+  .entry-list .wallet-card:last-child { border-bottom: none; }
+  .entry-list .wallet-card.editing { border-left: 3px solid var(--accent); }
+  .codes-block { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+  .notes-block { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
+  .notes-area { width: 100%; min-height: 160px; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; font-size: 14px; font-family: inherit; line-height: 1.5; background: var(--panel); color: var(--text); resize: vertical; box-sizing: border-box; }
+  .notes-area:focus { outline: none; border-color: var(--accent); }
+
+  .wallet-empty { color: var(--muted); font-style: italic; font-size: 13px; padding: 4px 0 10px; }
+  .add-btn { margin-top: 8px; background: transparent; border: 1px dashed var(--line); color: var(--muted); padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: 13px; }
+  .add-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  .expiry-warn { color: #b12a48; }
+  .expiry-soon { color: var(--amber-rim, #a96904); }
+  .exp-bold { font-weight: 700; }
+  .exp-bold-red { font-weight: 700; color: #b12a48; }
+</style>
+</head>
+<body>
+  <div id="auth-gate" class="auth-gate">
+    <div class="auth-card">
+      <h1>Sign in</h1>
+      <div class="sub">Sign in to view your travel wallet.</div>
+      <button class="gbtn" id="auth-google">Continue with Google</button>
+      <div class="sep">— or —</div>
+      <input id="auth-email" type="email" placeholder="you@example.com" autocomplete="email" />
+      <input id="auth-password" type="password" placeholder="Password (optional)" autocomplete="current-password" />
+      <div class="row-btns">
+        <button id="auth-signin">Sign in</button>
+        <button id="auth-signup">Create account</button>
+        <button id="auth-magic">Email me a link</button>
+      </div>
+      <div class="auth-error" id="auth-error"></div>
+      <div class="auth-msg" id="auth-msg"></div>
+    </div>
+  </div>
+
+  <header class="app-header" id="app-header" hidden>
+    <a class="app-header-brand" href="./" title="myitin — home">
+      <span class="app-header-brand-mark">m</span>
+      <span>myitin</span>
+    </a>
+    <div class="app-header-user">
+      <button id="app-user-btn" class="app-user-btn" type="button" aria-haspopup="true" aria-expanded="false">
+        <span class="app-user-initial" id="app-user-initial">?</span>
+        <span class="app-user-name" id="app-user-name">Signed in</span>
+        <span class="app-user-caret">▾</span>
+      </button>
+      <div class="app-user-menu" id="app-user-menu" hidden>
+        <button id="app-user-signout" type="button">Sign out</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="wallet-wrap" id="wallet-wrap" hidden>
+    <div class="wallet-head">
+      <h1>Travel wallet</h1>
+    </div>
+    <p class="wallet-intro">
+      Your frequent-flyer numbers, Known Traveler / Global Entry, driver's licenses
+      and passports — all in one place. Stored privately on your account; never
+      shared with anyone, even on trips you share.
+    </p>
+    <div class="wallet-status" id="wallet-status"></div>
+
+    <div class="people-bar" id="people-bar"></div>
+
+    <div class="present-overlay" id="present-overlay" hidden>
+      <div class="present-card">
+        <h2>Show to someone</h2>
+        <div class="psub">Pick what to show and whose — it opens on a clean page in a new tab. Nothing else is visible there.</div>
+        <div class="present-step-label">1 · Which credential?</div>
+        <div class="cred-choices" id="present-creds"></div>
+        <div class="present-step-label">2 · Whose details?</div>
+        <div class="name-choices" id="present-names"><div class="present-empty-note">Choose a credential first.</div></div>
+        <div class="present-actions">
+          <button class="btn-cancel" id="present-cancel">Cancel</button>
+          <button class="present-show" id="present-show" disabled>Show</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="present-overlay" id="person-overlay" hidden>
+      <div class="present-card" id="person-card"></div>
+    </div>
+
+    <nav class="wallet-nav" id="wallet-nav"></nav>
+
+    <div id="wallet-sections"></div>
+  </div>
+
+<script>
+// --- Auth gate (shared pattern with index.html) -------------------------
+(function setupAuthGate() {
+  const gate = document.getElementById("auth-gate");
+  const wrap = document.getElementById("wallet-wrap");
+  const header = document.getElementById("app-header");
+  const userName = document.getElementById("app-user-name");
+  const userInitial = document.getElementById("app-user-initial");
+  const err = document.getElementById("auth-error");
+  const msg = document.getElementById("auth-msg");
+  const setErr = (t) => { err.textContent = t || ""; msg.textContent = ""; };
+  const setMsg = (t) => { msg.textContent = t || ""; err.textContent = ""; };
+
+  function whenReady(cb) {
+    if (window.fb) return cb();
+    const iv = setInterval(() => { if (window.fb) { clearInterval(iv); cb(); } }, 30);
+  }
+
+  whenReady(() => {
+    const menuBtn = document.getElementById("app-user-btn");
+    const menu = document.getElementById("app-user-menu");
+    menuBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const open = menu.hidden;
+      menu.hidden = !open;
+      menuBtn.setAttribute("aria-expanded", String(open));
+    });
+    document.addEventListener("click", (e) => {
+      if (menu.hidden) return;
+      if (e.target.closest("#app-user-menu") || e.target.closest("#app-user-btn")) return;
+      menu.hidden = true;
+      menuBtn.setAttribute("aria-expanded", "false");
+    });
+
+    window.fb.onAuth((user) => {
+      if (user) {
+        gate.classList.remove("show");
+        wrap.hidden = false;
+        header.hidden = false;
+        const label = user.displayName || user.email || "Signed in";
+        userName.textContent = label;
+        userInitial.textContent = (label[0] || "?");
+      } else {
+        gate.classList.add("show");
+        wrap.hidden = true;
+        header.hidden = true;
+      }
+    });
+
+    document.getElementById("auth-google").addEventListener("click", async () => {
+      setErr("");
+      try { await window.fb.signInGoogle(); }
+      catch (e) { setErr(e.message || "Google sign-in failed"); }
+    });
+    document.getElementById("auth-signin").addEventListener("click", async () => {
+      const email = document.getElementById("auth-email").value.trim();
+      const pw = document.getElementById("auth-password").value;
+      if (!email || !pw) { setErr("Email and password required"); return; }
+      try { await window.fb.signInPassword(email, pw); }
+      catch (e) { setErr(e.message || "Sign-in failed"); }
+    });
+    document.getElementById("auth-signup").addEventListener("click", async () => {
+      const email = document.getElementById("auth-email").value.trim();
+      const pw = document.getElementById("auth-password").value;
+      if (!email || !pw) { setErr("Email and password required"); return; }
+      if (pw.length < 6) { setErr("Password must be at least 6 characters"); return; }
+      try { await window.fb.signUpPassword(email, pw); }
+      catch (e) { setErr(e.message || "Sign-up failed"); }
+    });
+    document.getElementById("auth-magic").addEventListener("click", async () => {
+      const email = document.getElementById("auth-email").value.trim();
+      if (!email) { setErr("Email required for magic link"); return; }
+      try {
+        await window.fb.sendMagicLink(email);
+        setMsg("Check your email — click the link to sign in.");
+      } catch (e) { setErr(e.message || "Couldn't send link"); }
+    });
+    document.getElementById("app-user-signout").addEventListener("click", async () => {
+      try { await window.fb.signOut(); } catch (e) { /* ignore */ }
+    });
+  });
+})();
+
+// --- Wallet editor ------------------------------------------------------
+//
+// Each section stores a flat array of entries, but the UI groups them two
+// levels deep: section → group (the airline / program / country) → the
+// people under it and their numbers. The `group` field is the second level;
+// `fields` are the per-person details shown in each entry row. The whole
+// wallet doc is one object:
+//   { people: [...], frequentFlyer: [...], trustedTraveler: [...], ... }
+
+const SECTIONS = [
+  {
+    key: "frequentFlyer",
+    title: "Frequent flyer & loyalty",
+    nav: "Frequent flyer",
+    group: { key: "program", label: "Airline / program", placeholder: "Delta / United / Alaska" },
+    addGroupLabel: "+ Add airline",
+    addEntryLabel: "+ Add person",
+    login: true,
+    sectionNotes: true,
+    fields: [
+      { key: "number", label: "Member number", number: true },
+      { key: "status", label: "Status / tier", placeholder: "Gold", bare: true },
+      { key: "miles", label: "Miles", placeholder: "e.g. 85,000", subDate: "milesUpdated", comma: true },
+      { key: "milesUpdated", label: "Balance updated", date: true },
+      { key: "walletBalance", label: "Wallet balance", placeholder: "e.g. $250", money: true, bare: true },
+      { key: "walletExpires", label: "Wallet expires", date: true, expiry: true },
+      { key: "notes", label: "Notes", wide: true },
+    ],
+    sublists: [
+      {
+        store: "Certs", label: "Certificates", addLabel: "+ Add certificate", person: true,
+        fields: [
+          { key: "type", label: "Type", placeholder: "eCredit / Companion / Upgrade", bare: true, suggest: certTypeSuggestions },
+          { key: "value", label: "Value / number", number: true },
+          { key: "expires", label: "Expires", date: true, expBold: true },
+        ],
+      },
+    ],
+  },
+  {
+    key: "hotels",
+    title: "Hotel loyalty",
+    nav: "Hotels",
+    group: { key: "brand", label: "Hotel program", placeholder: "Marriott Bonvoy / Hilton Honors" },
+    addGroupLabel: "+ Add hotel program",
+    addEntryLabel: "+ Add person",
+    login: true,
+    sectionNotes: true,
+    fields: [
+      { key: "number", label: "Member number", number: true },
+      { key: "status", label: "Status / tier", placeholder: "Gold", bare: true },
+      { key: "miles", label: "Points", placeholder: "e.g. 120,000", subDate: "milesUpdated", comma: true },
+      { key: "milesUpdated", label: "Balance updated", date: true },
+      { key: "pointsExpires", label: "Points expire", date: true, expiry: true },
+      { key: "walletBalance", label: "Wallet balance", placeholder: "e.g. $250", money: true, bare: true },
+      { key: "walletExpires", label: "Wallet expires", date: true, expiry: true },
+      { key: "notes", label: "Notes", wide: true },
+    ],
+    sublists: [
+      {
+        store: "Codes", label: "Discount codes", addLabel: "+ Add code", person: false,
+        fields: [
+          { key: "name", label: "Name", placeholder: "e.g. Corporate, AAA", bare: true },
+          { key: "code", label: "Code", number: true },
+          { key: "expires", label: "Expires", date: true, expiry: true },
+        ],
+      },
+    ],
+  },
+  {
+    key: "cars",
+    title: "Rental car loyalty",
+    nav: "Cars",
+    group: { key: "brand", label: "Rental company", placeholder: "Hertz / Avis / National" },
+    addGroupLabel: "+ Add company",
+    addEntryLabel: "+ Add person",
+    login: true,
+    fields: [
+      { key: "number", label: "Member number", number: true },
+      { key: "status", label: "Status / tier", placeholder: "President's Circle", bare: true },
+      { key: "miles", label: "Points", placeholder: "e.g. 5,000", subDate: "milesUpdated", comma: true },
+      { key: "milesUpdated", label: "Balance updated", date: true },
+      { key: "pointsExpires", label: "Points expire", date: true, expiry: true },
+      { key: "walletBalance", label: "Wallet balance", placeholder: "e.g. $250", money: true, bare: true },
+      { key: "walletExpires", label: "Wallet expires", date: true, expiry: true },
+      { key: "notes", label: "Notes", wide: true },
+    ],
+    sublists: [
+      {
+        store: "Codes", label: "Discount codes", addLabel: "+ Add code", person: false,
+        fields: [
+          { key: "name", label: "Name", placeholder: "e.g. Costco, AAA, CDP", bare: true },
+          { key: "code", label: "Code", number: true },
+          { key: "expires", label: "Expires", date: true, expiry: true },
+        ],
+      },
+    ],
+  },
+  {
+    key: "trustedTraveler",
+    title: "TSA PreCheck / Global Entry",
+    nav: "PreCheck",
+    group: { key: "type", label: "Program", placeholder: "Global Entry / TSA PreCheck / NEXUS" },
+    addGroupLabel: "+ Add program",
+    addEntryLabel: "+ Add person",
+    fields: [
+      { key: "number", label: "Known Traveler / PASSID", number: true },
+      { key: "expires", label: "Expires", date: true, expiry: true },
+      { key: "notes", label: "Notes", wide: true },
+    ],
+  },
+  {
+    key: "licenses",
+    title: "Driver's licenses",
+    nav: "DLs",
+    group: { key: "region", label: "State / region", placeholder: "California" },
+    addGroupLabel: "+ Add state",
+    addEntryLabel: "+ Add person",
+    fields: [
+      { key: "number", label: "License number", number: true },
+      { key: "realId", label: "REAL ID?", placeholder: "Yes / No" },
+      { key: "expires", label: "Expires", date: true, expiry: true },
+      { key: "notes", label: "Notes", wide: true },
+    ],
+  },
+  {
+    key: "passports",
+    title: "Passports",
+    nav: "Passports",
+    group: { key: "country", label: "Issuing country", placeholder: "United States" },
+    addGroupLabel: "+ Add country",
+    addEntryLabel: "+ Add person",
+    fields: [
+      { key: "number", label: "Passport number", number: true },
+      { key: "issued", label: "Issued", date: true },
+      { key: "expires", label: "Expires", date: true, expiry: true },
+      { key: "notes", label: "Notes", wide: true },
+    ],
+  },
+];
+
+let WALLET = {};
+let _hydrating = false;
+let _saveTimer = null;
+
+function people() {
+  return Array.isArray(WALLET.people) ? WALLET.people : [];
+}
+function personName(id) {
+  const p = people().find(x => x.id === id);
+  return p ? (p.name || "Unnamed") : "";
+}
+function newPersonId() {
+  return "p" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+}
+
+// Per-entry edit state. An entry only writes to Firestore when the user clicks
+// Save (or presses Enter) — until then edits live in a DRAFTS copy so Cancel
+// can discard them. EDITING holds the ids of entries currently being edited;
+// NEW holds ids of just-added entries (Cancel removes those entirely).
+const EDITING = new Set();
+const DRAFTS = new Map();
+const NEW = new Set();
+// Which group (airline / program / country) sub-tab is active per section.
+const ACTIVE_GROUP = {};
+function newRowId() {
+  return "r" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+}
+function ensureRowId(row) { if (!row.id) row.id = newRowId(); return row.id; }
+
+// Immediate save with visible confirmation (used on every explicit commit).
+async function saveNow() {
+  setStatus("Saving…", "saving");
+  try {
+    await window.fb.saveWallet(WALLET);
+    setStatus("Saved ✓", "saved");
+  } catch (e) {
+    setStatus("Couldn't save — " + (e.message || "error"), "");
+  }
+}
+
+const statusEl = document.getElementById("wallet-status");
+function setStatus(text, cls) {
+  statusEl.textContent = text || "";
+  statusEl.className = "wallet-status" + (cls ? " " + cls : "");
+}
+
+function scheduleSave() {
+  if (_hydrating) return;
+  setStatus("Saving…", "saving");
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(async () => {
+    try {
+      await window.fb.saveWallet(WALLET);
+      setStatus("All changes saved", "saved");
+    } catch (e) {
+      setStatus("Couldn't save — " + (e.message || "error"), "");
+    }
+  }, 700);
+}
+
+function todayISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// Add thousands separators to a pure-number string ("85000" -> "85,000").
+// Leaves non-numeric values untouched.
+function fmtCommas(v) {
+  const s = String(v == null ? "" : v).trim();
+  const cleaned = s.replace(/,/g, "");
+  if (/^\d+$/.test(cleaned)) return cleaned.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return s;
+}
+// Display value for a field (applies comma formatting when flagged).
+function fieldDisplay(f, v) { return f.comma ? fmtCommas(v) : v; }
+
+// Format an ISO date (yyyy-mm-dd) as mm/dd/yy.
+function fmtShortDate(iso) {
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-");
+  if (!y || !m || !d) return iso;
+  return `${m}/${d}/${y.slice(2)}`;
+}
+
+// Flag a passport/license/known-traveler expiry that's already past or within
+// 6 months — handy nudge to renew before a trip.
+function expiryClass(value) {
+  if (!value) return "";
+  const exp = new Date(value + "T00:00:00");
+  if (isNaN(exp)) return "";
+  const now = new Date();
+  if (exp < now) return "expiry-warn";
+  const soon = new Date(now); soon.setMonth(soon.getMonth() + 6);
+  return exp < soon ? "expiry-soon" : "";
+}
+
+// Certificate expiry styling: bold red if within 6 months (or past), else
+// just bold.
+function expBoldClass(value) {
+  if (!value) return "exp-bold";
+  const exp = new Date(value + "T00:00:00");
+  if (isNaN(exp)) return "exp-bold";
+  const soon = new Date(); soon.setMonth(soon.getMonth() + 6);
+  return exp <= soon ? "exp-bold-red" : "exp-bold";
+}
+
+function renderPeopleBar() {
+  const bar = document.getElementById("people-bar");
+  bar.innerHTML = "";
+  const list = people();
+
+  const head = document.createElement("div");
+  head.className = "people-bar-head";
+  const h2 = document.createElement("h2");
+  h2.textContent = "People";
+  head.appendChild(h2);
+  bar.appendChild(head);
+
+  const chips = document.createElement("div");
+  chips.className = "people-chips";
+
+  list.forEach((p) => {
+    const chip = document.createElement("div");
+    chip.className = "person-chip";
+
+    // Whole name is a button — clicking opens this person's full detail page.
+    const name = document.createElement("button");
+    name.className = "person-name-btn";
+    name.textContent = p.name || "Unnamed";
+    name.title = "View all details for this person";
+    name.addEventListener("click", () => openPersonDetail(p));
+    chip.appendChild(name);
+
+    const x = document.createElement("button");
+    x.className = "px";
+    x.title = "Remove person";
+    x.textContent = "×";
+    x.addEventListener("click", () => {
+      if (!confirm(`Remove "${p.name || "this person"}"? Entries assigned to them won't be deleted, just unassigned.`)) return;
+      const i = WALLET.people.indexOf(p);
+      if (i >= 0) WALLET.people.splice(i, 1);
+      // Unassign this person from any entries that referenced them.
+      for (const section of SECTIONS) {
+        (WALLET[section.key] || []).forEach(r => { if (r.person === p.id) r.person = ""; });
+      }
+      render();
+      renderPeopleBar();
+      scheduleSave();
+    });
+    chip.appendChild(x);
+
+    chips.appendChild(chip);
+  });
+
+  const add = document.createElement("button");
+  add.className = "add-btn";
+  add.style.marginTop = "0";
+  add.textContent = "+ Add person";
+  add.addEventListener("click", () => {
+    if (!Array.isArray(WALLET.people)) WALLET.people = [];
+    const p = { id: newPersonId(), name: "" };
+    WALLET.people.push(p);
+    renderPeopleBar();
+    render();
+    scheduleSave();
+    // Open the new person's detail so they can type the name + review details.
+    openPersonDetail(p);
+  });
+  chips.appendChild(add);
+  bar.appendChild(chips);
+
+  const showBtn = document.createElement("button");
+  showBtn.className = "present-btn";
+  showBtn.textContent = "Show to someone…";
+  showBtn.title = "Pick a credential and names, then open a clean read-only page to show.";
+  showBtn.disabled = list.length === 0;
+  showBtn.addEventListener("click", openPresentModal);
+  bar.appendChild(showBtn);
+}
+
+// --- "Show to someone" presentation flow --------------------------------
+const PRESENT = { section: null, names: new Set() };
+
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// Map of personId ("" = unassigned) -> entry count for a section.
+function peopleCountsFor(section) {
+  const counts = new Map();
+  (WALLET[section.key] || []).forEach(r => {
+    if (EDITING.has(r.id) && NEW.has(r.id)) return; // skip half-added rows
+    const pid = r.person || "";
+    counts.set(pid, (counts.get(pid) || 0) + 1);
+  });
+  return counts;
+}
+
+function setupPresentModal() {
+  const overlay = document.getElementById("present-overlay");
+  document.getElementById("present-cancel").addEventListener("click", closePresentModal);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) closePresentModal(); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !overlay.hidden) closePresentModal();
+  });
+  document.getElementById("present-show").addEventListener("click", () => {
+    if (!PRESENT.section || PRESENT.names.size === 0) return;
+    presentShow(PRESENT.section, PRESENT.names);
+    closePresentModal();
+  });
+}
+
+function openPresentModal() {
+  PRESENT.section = null;
+  PRESENT.names = new Set();
+  renderPresentCreds();
+  renderPresentNames();
+  updateShowState();
+  document.getElementById("present-overlay").hidden = false;
+}
+function closePresentModal() {
+  document.getElementById("present-overlay").hidden = true;
+}
+
+// --- Person detail (click a name to see all their credentials) -----------
+function setupPersonModal() {
+  const overlay = document.getElementById("person-overlay");
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) closePersonDetail(); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !overlay.hidden) closePersonDetail();
+  });
+}
+function closePersonDetail() {
+  document.getElementById("person-overlay").hidden = true;
+}
+
+function openPersonDetail(person) {
+  const card = document.getElementById("person-card");
+  card.innerHTML = "";
+
+  // Header: editable name + Close.
+  const head = document.createElement("div");
+  head.className = "pd-head";
+  const name = document.createElement("input");
+  name.className = "pd-name";
+  name.value = person.name || "";
+  name.placeholder = "Name";
+  name.addEventListener("input", () => {
+    person.name = name.value;
+    scheduleSave();
+    renderPeopleBar(); // keep the chip label in sync
+  });
+  head.appendChild(name);
+  const close = document.createElement("button");
+  close.className = "pd-close";
+  close.textContent = "Close";
+  close.addEventListener("click", closePersonDetail);
+  head.appendChild(close);
+  card.appendChild(head);
+
+  const sub = document.createElement("div");
+  sub.className = "pd-sub";
+  sub.textContent = "All credentials saved under this person.";
+  card.appendChild(sub);
+
+  // Each section's entries for this person.
+  let any = false;
+  for (const section of SECTIONS) {
+    const entries = (WALLET[section.key] || []).filter(r =>
+      r.person === person.id && !(EDITING.has(r.id) && NEW.has(r.id)));
+    if (!entries.length) continue;
+    any = true;
+
+    const label = document.createElement("div");
+    label.className = "pd-section-label";
+    label.textContent = section.nav;
+    card.appendChild(label);
+
+    const numField = section.fields.find(f => f.number);
+    const metaFields = section.fields.filter(f => !f.number);
+    entries.slice()
+      .sort((a, b) => (a[section.group.key] || "").localeCompare(b[section.group.key] || ""))
+      .forEach(r => {
+        const box = document.createElement("div");
+        box.className = "pd-cred";
+
+        const g = document.createElement("div");
+        g.className = "pd-cg";
+        g.textContent = r[section.group.key] || "—";
+        box.appendChild(g);
+
+        if (numField && r[numField.key]) {
+          const num = document.createElement("div");
+          num.className = "pd-cnum";
+          num.textContent = r[numField.key];
+          box.appendChild(num);
+        }
+
+        const parts = metaFields.filter(f => r[f.key]);
+        if (parts.length) {
+          const meta = document.createElement("div");
+          meta.className = "pd-cmeta";
+          parts.forEach((f, i) => {
+            if (i) meta.appendChild(document.createTextNode(" · "));
+            const span = document.createElement("span");
+            span.className = (f.expiry ? expiryClass(r[f.key]) : "") + (f.money ? " money" : "");
+            span.textContent = f.bare ? fieldDisplay(f, r[f.key]) : `${f.label}: ${fieldDisplay(f, r[f.key])}`;
+            meta.appendChild(span);
+          });
+          box.appendChild(meta);
+        }
+        card.appendChild(box);
+      });
+  }
+  if (!any) {
+    const empty = document.createElement("div");
+    empty.className = "pd-empty";
+    empty.textContent = "No details yet — add entries in the tabs and assign them to this person.";
+    card.appendChild(empty);
+  }
+
+  const remove = document.createElement("button");
+  remove.className = "pd-remove";
+  remove.textContent = "Remove this person";
+  remove.addEventListener("click", () => {
+    if (!confirm(`Remove "${person.name || "this person"}"? Their entries stay but become unassigned.`)) return;
+    const i = WALLET.people.indexOf(person);
+    if (i >= 0) WALLET.people.splice(i, 1);
+    for (const section of SECTIONS) {
+      (WALLET[section.key] || []).forEach(r => { if (r.person === person.id) r.person = ""; });
+    }
+    closePersonDetail();
+    render(); renderPeopleBar(); scheduleSave();
+  });
+  card.appendChild(remove);
+
+  document.getElementById("person-overlay").hidden = false;
+  if (!person.name) name.focus();
+}
+
+function renderPresentCreds() {
+  const wrap = document.getElementById("present-creds");
+  wrap.innerHTML = "";
+  const withData = SECTIONS.filter(s => peopleCountsFor(s).size > 0);
+  if (!withData.length) {
+    wrap.innerHTML = '<div class="present-empty-note">Nothing saved to show yet.</div>';
+    return;
+  }
+  // A required single-select — you must pick exactly one credential to show.
+  const sel = document.createElement("select");
+  sel.className = "present-select";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "Select a credential…";
+  placeholder.disabled = true;
+  placeholder.selected = !PRESENT.section;
+  sel.appendChild(placeholder);
+  withData.forEach(section => {
+    const opt = document.createElement("option");
+    opt.value = section.key;
+    opt.textContent = section.nav;
+    if (PRESENT.section === section) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  sel.addEventListener("change", () => {
+    PRESENT.section = SECTIONS.find(s => s.key === sel.value) || null;
+    // Default to everyone who has an entry in this credential.
+    PRESENT.names = PRESENT.section
+      ? new Set(peopleCountsFor(PRESENT.section).keys()) : new Set();
+    renderPresentNames();
+    updateShowState();
+  });
+  wrap.appendChild(sel);
+}
+
+function renderPresentNames() {
+  const wrap = document.getElementById("present-names");
+  wrap.innerHTML = "";
+  if (!PRESENT.section) {
+    wrap.innerHTML = '<div class="present-empty-note">Choose a credential first.</div>';
+    return;
+  }
+  const counts = peopleCountsFor(PRESENT.section);
+  // People list order first, then unassigned at the end.
+  const order = [...people().map(p => p.id), ""].filter(id => counts.has(id));
+  order.forEach(pid => {
+    const label = document.createElement("label");
+    label.className = "name-choice";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = PRESENT.names.has(pid);
+    cb.addEventListener("change", () => {
+      if (cb.checked) PRESENT.names.add(pid); else PRESENT.names.delete(pid);
+      updateShowState();
+    });
+    label.appendChild(cb);
+    const nm = document.createElement("span");
+    nm.textContent = pid ? personName(pid) : "Unassigned";
+    label.appendChild(nm);
+    const c = document.createElement("span");
+    c.className = "nc-count";
+    c.textContent = `(${counts.get(pid)})`;
+    label.appendChild(c);
+    wrap.appendChild(label);
+  });
+}
+
+function updateShowState() {
+  document.getElementById("present-show").disabled =
+    !(PRESENT.section && PRESENT.names.size > 0);
+}
+
+// Build a clean standalone HTML page for the chosen credential + names and
+// open it in a new tab. Data is written from memory — no extra network call.
+function presentShow(section, nameSet) {
+  const entries = (WALLET[section.key] || []).filter(r =>
+    nameSet.has(r.person || "") && !(EDITING.has(r.id) && NEW.has(r.id)));
+
+  // Group entries by person, in people-list order then unassigned.
+  const byPerson = new Map();
+  entries.forEach(r => {
+    const pid = r.person || "";
+    if (!byPerson.has(pid)) byPerson.set(pid, []);
+    byPerson.get(pid).push(r);
+  });
+  const order = [...people().map(p => p.id), ""].filter(id => byPerson.has(id));
+
+  const numField = section.fields.find(f => f.number);
+  const metaFields = section.fields.filter(f => !f.number);
+
+  const blocks = order.map(pid => {
+    const rows = byPerson.get(pid).slice().sort((a, b) =>
+      (a[section.group.key] || "").localeCompare(b[section.group.key] || ""));
+    const creds = rows.map(r => {
+      const meta = metaFields
+        .filter(f => r[f.key])
+        .map(f => {
+          const dv = fieldDisplay(f, r[f.key]);
+          const txt = f.bare ? esc(dv) : `${esc(f.label)}: ${esc(dv)}`;
+          return f.money ? `<span class="money">${txt}</span>` : txt;
+        })
+        .join(" &middot; ");
+      return `
+        <div class="cred">
+          <div class="cg">${esc(r[section.group.key] || "—")}</div>
+          ${numField && r[numField.key] ? `<div class="cnum">${esc(r[numField.key])}</div>` : ""}
+          ${meta ? `<div class="cmeta">${meta}</div>` : ""}
+        </div>`;
+    }).join("");
+    return `<section class="person"><h2>${esc(pid ? personName(pid) : "Unassigned")}</h2>${creds}</section>`;
+  }).join("");
+
+  const html = `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="robots" content="noindex, nofollow" />
+<title>${esc(section.title)}</title>
+<style>
+  :root { --bg:#fff; --text:#1a1d23; --muted:#6b7280; --line:#e4e7ec; --accent:#4f6dff; --panel:#f7f8fa; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  .bar { position:sticky; top:0; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px 20px; background:var(--bg); border-bottom:1px solid var(--line); }
+  .bar h1 { margin:0; font-size:18px; }
+  .close { background:var(--accent); color:#fff; border:none; border-radius:8px; padding:10px 20px; font-size:15px; font-weight:600; cursor:pointer; }
+  .wrap { max-width:680px; margin:0 auto; padding:18px 20px 60px; }
+  .person { margin-bottom:22px; }
+  .person h2 { font-size:15px; text-transform:uppercase; letter-spacing:0.04em; color:var(--muted); margin:0 0 8px; }
+  .cred { border:1px solid var(--line); border-radius:10px; background:var(--panel); padding:14px 16px; margin-bottom:10px; }
+  .cg { font-size:15px; font-weight:700; margin-bottom:4px; }
+  .cnum { font-size:24px; font-weight:700; font-variant-numeric:tabular-nums; letter-spacing:0.03em; }
+  .cmeta { color:var(--muted); font-size:13px; margin-top:6px; }
+  .cmeta .money { color:#15803d; font-weight:700; }
+  .empty { color:var(--muted); font-style:italic; }
+</style></head>
+<body>
+  <div class="bar"><h1>${esc(section.title)}</h1><button class="close" onclick="window.close()">Close</button></div>
+  <div class="wrap">${blocks || '<div class="empty">Nothing to show.</div>'}</div>
+</body></html>`;
+
+  const w = window.open("", "_blank");
+  if (!w) { alert("Pop-up blocked — allow pop-ups for this site to show the page."); return; }
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
+}
+
+const TAB_KEY = "wallet-active-tab";
+let activeTab = localStorage.getItem(TAB_KEY) || SECTIONS[0].key;
+if (!SECTIONS.some(s => s.key === activeTab)) activeTab = SECTIONS[0].key;
+
+function buildNav() {
+  const nav = document.getElementById("wallet-nav");
+  nav.innerHTML = "";
+  for (const section of SECTIONS) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.dataset.tab = section.key;
+    btn.textContent = section.nav;
+    btn.classList.toggle("active", section.key === activeTab);
+    btn.addEventListener("click", () => setTab(section.key));
+    nav.appendChild(btn);
+  }
+}
+
+function setTab(key) {
+  activeTab = key;
+  localStorage.setItem(TAB_KEY, key);
+  document.querySelectorAll("#wallet-nav button").forEach(b =>
+    b.classList.toggle("active", b.dataset.tab === key));
+  document.querySelectorAll(".wallet-section").forEach(s =>
+    s.hidden = s.id !== "sec-" + key);
+}
+
+function render() {
+  const root = document.getElementById("wallet-sections");
+  root.innerHTML = "";
+  for (const section of SECTIONS) {
+    const rows = Array.isArray(WALLET[section.key]) ? WALLET[section.key] : [];
+    const secEl = document.createElement("section");
+    secEl.className = "wallet-section";
+    secEl.id = "sec-" + section.key;
+    secEl.hidden = section.key !== activeTab;
+
+    const gkey = section.group.key;
+    rows.forEach(ensureRowId);
+
+    // Partition: entries with a group value become group sub-tabs; a brand-new
+    // entry with no group yet (just hit "+ Add airline") is "loose" and shows
+    // its edit form in the content area until it's named and saved.
+    const groups = new Map(); // groupValue -> [rows]
+    const loose = [];
+    for (const row of rows) {
+      const gv = (row[gkey] || "").trim();
+      if (EDITING.has(row.id) && !gv) { loose.push(row); continue; }
+      const k = gv || "(Unspecified)";
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(row);
+    }
+    // A brand that only has sub-list entries (codes/certs, no members) still
+    // gets a tab.
+    (section.sublists || []).forEach(sl => {
+      (WALLET[section.key + sl.store] || []).forEach(c => {
+        const k = (c.brand || "").trim() || "(Unspecified)";
+        if (!groups.has(k)) groups.set(k, []);
+      });
+    });
+    const groupVals = [...groups.keys()];
+
+    // Resolve the active sub-tab. When adding a new group, nothing is active.
+    let active = ACTIVE_GROUP[section.key];
+    if (!groups.has(active)) active = groupVals[0];
+    const addingNew = loose.length > 0;
+
+    // --- second-level tab strip (Delta / United / Alaska …) ---
+    const subnav = document.createElement("div");
+    subnav.className = "wallet-subnav";
+    groupVals.forEach(gv => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = gv;
+      const c = document.createElement("span");
+      c.className = "subnav-count";
+      c.textContent = groups.get(gv).length;
+      btn.appendChild(c);
+      btn.classList.toggle("active", !addingNew && gv === active);
+      btn.addEventListener("click", () => {
+        dropLooseNew(section);     // abandon a half-started new group
+        ACTIVE_GROUP[section.key] = gv;
+        render();
+      });
+      subnav.appendChild(btn);
+    });
+    const addG = document.createElement("button");
+    addG.type = "button";
+    addG.className = "subnav-add";
+    addG.title = section.addGroupLabel;
+    addG.textContent = "+";
+    addG.classList.toggle("active", addingNew);
+    addG.addEventListener("click", () => addEntry(section, null));
+    subnav.appendChild(addG);
+    secEl.appendChild(subnav);
+
+    // --- content for the active sub-tab ---
+    const content = document.createElement("div");
+    content.className = "wallet-cards";
+
+    if (addingNew) {
+      loose.forEach(row => content.appendChild(buildEditCard(section, row)));
+    } else if (!groupVals.length) {
+      const empty = document.createElement("div");
+      empty.className = "wallet-empty";
+      empty.textContent = `Nothing saved yet — press “${section.addGroupLabel}”.`;
+      content.appendChild(empty);
+    } else {
+      const entries = groups.get(active) || [];
+      const toolbar = document.createElement("div");
+      toolbar.className = "content-toolbar";
+      const title = document.createElement("span");
+      title.className = "ct-title";
+      // When sub-lists are also shown, label this first list "Members".
+      title.textContent = section.sublists ? `${active} — Members` : active;
+      toolbar.appendChild(title);
+      const right = document.createElement("div");
+      right.className = "toolbar-right";
+      if (section.login) {
+        right.appendChild(buildLoginControl(section, active === "(Unspecified)" ? "" : active));
+      }
+      const addPerson = document.createElement("button");
+      addPerson.className = "group-add";
+      addPerson.textContent = section.addEntryLabel;
+      addPerson.addEventListener("click", () =>
+        addEntry(section, active === "(Unspecified)" ? null : active));
+      right.appendChild(addPerson);
+      toolbar.appendChild(right);
+      content.appendChild(toolbar);
+
+      const list = document.createElement("div");
+      list.className = "entry-list";
+      if (!entries.length) {
+        const note = document.createElement("div");
+        note.className = "wallet-empty";
+        note.style.padding = "11px 14px";
+        note.textContent = "No members yet.";
+        list.appendChild(note);
+      }
+      entries.forEach(row => {
+        list.appendChild(EDITING.has(row.id) ? buildEditCard(section, row) : buildEntryRow(section, row));
+      });
+      content.appendChild(list);
+
+      // Extra lists: discount codes (Hotels/Cars), certificates (Frequent flyer).
+      (section.sublists || []).forEach(sl =>
+        content.appendChild(buildSublist(section, sl, active)));
+    }
+    secEl.appendChild(content);
+
+    if (section.sectionNotes) renderSectionNotes(section, secEl);
+
+    root.appendChild(secEl);
+  }
+}
+
+// A free-form notes box for the whole section (e.g. the Frequent flyer page).
+function renderSectionNotes(section, secEl) {
+  const key = section.key + "Notes";
+  const block = document.createElement("div");
+  block.className = "notes-block";
+
+  const head = document.createElement("div");
+  head.className = "pd-section-label";
+  head.textContent = "Notes";
+  block.appendChild(head);
+
+  const ta = document.createElement("textarea");
+  ta.className = "notes-area";
+  ta.placeholder = "Anything worth remembering — partner airlines, award sweet spots, family pooling, reminders…";
+  ta.value = WALLET[key] || "";
+  ta.addEventListener("input", () => { WALLET[key] = ta.value; scheduleSave(); });
+  block.appendChild(ta);
+
+  secEl.appendChild(block);
+}
+
+// Add a new entry. groupVal pre-fills the group (e.g. "Delta") when adding a
+// person under an existing group; null leaves it blank (adding a new group).
+function addEntry(section, groupVal) {
+  if (!Array.isArray(WALLET[section.key])) WALLET[section.key] = [];
+  const row = { id: newRowId() };
+  if (groupVal) row[section.group.key] = groupVal;
+  WALLET[section.key].push(row);
+  EDITING.add(row.id);
+  NEW.add(row.id);
+  DRAFTS.set(row.id, { ...row });
+  render();
+  const card = document.querySelector(`.wallet-card[data-id="${row.id}"]`);
+  // Focus the group field for a new group, else the first detail field.
+  (card?.querySelector(".wallet-fields input"))?.focus();
+}
+
+// Suggested certificate types vary by airline (free text, just hints).
+function certTypeSuggestions(brand) {
+  const b = (brand || "").toLowerCase();
+  if (b.includes("delta")) return ["eCredit", "Companion certificate", "Upgrade certificate"];
+  if (b.includes("alaska")) return ["Credit", "Certificate", "Companion certificate"];
+  return ["eCredit", "Credit", "Companion certificate", "Upgrade certificate", "Voucher"];
+}
+
+// --- Drag-to-reorder (hamburger handle) ---------------------------------
+let DRAG = null; // { arr, row, group }
+function dragHandle() {
+  const h = document.createElement("span");
+  h.className = "drag-handle";
+  h.title = "Drag to reorder";
+  h.textContent = "☰";
+  return h;
+}
+// Wire HTML5 drag-and-drop on a row, restricted to its handle and to siblings
+// in the same list (same backing array + same group/brand).
+function makeReorderable(el, arr, row, group, handle) {
+  const enable = () => { el.draggable = true; };
+  handle.addEventListener("mousedown", enable);
+  handle.addEventListener("touchstart", enable, { passive: true });
+  el.addEventListener("dragstart", (e) => {
+    DRAG = { arr, row, group };
+    el.classList.add("dragging");
+    e.dataTransfer.effectAllowed = "move";
+    try { e.dataTransfer.setData("text/plain", row.id); } catch (_) {}
+  });
+  el.addEventListener("dragend", () => {
+    el.draggable = false;
+    document.querySelectorAll(".dragging,.drop-before,.drop-after")
+      .forEach(n => n.classList.remove("dragging", "drop-before", "drop-after"));
+    DRAG = null;
+  });
+  const sameList = () => DRAG && DRAG.arr === arr && DRAG.group === group && DRAG.row !== row;
+  el.addEventListener("dragover", (e) => {
+    if (!sameList()) return;
+    e.preventDefault();
+    const r = el.getBoundingClientRect();
+    const after = (e.clientY - r.top) > r.height / 2;
+    el.classList.toggle("drop-after", after);
+    el.classList.toggle("drop-before", !after);
+  });
+  el.addEventListener("dragleave", () => el.classList.remove("drop-before", "drop-after"));
+  el.addEventListener("drop", (e) => {
+    if (!sameList()) return;
+    e.preventDefault();
+    const after = el.classList.contains("drop-after");
+    const dragged = DRAG.row;
+    const from = arr.indexOf(dragged);
+    if (from >= 0) arr.splice(from, 1);
+    let to = arr.indexOf(row);
+    if (after) to += 1;
+    arr.splice(to, 0, dragged);
+    render();
+    saveNow();
+  });
+}
+
+// --- Per-company login-page links ---------------------------------------
+function getGroupLink(section, brand) {
+  const m = WALLET[section.key + "Links"];
+  return (m && typeof m === "object" && m[brand]) || "";
+}
+function setGroupLink(section, brand, url) {
+  const k = section.key + "Links";
+  if (!WALLET[k] || typeof WALLET[k] !== "object") WALLET[k] = {};
+  if (url) WALLET[k][brand] = url; else delete WALLET[k][brand];
+  render();
+  saveNow();
+}
+function promptLogin(section, brand) {
+  const cur = getGroupLink(section, brand);
+  const next = prompt(`Login page URL for ${brand || "this company"}:`, cur);
+  if (next === null) return;
+  let url = next.trim();
+  if (url && !/^https?:\/\//i.test(url)) url = "https://" + url;
+  setGroupLink(section, brand, url);
+}
+function buildLoginControl(section, brand) {
+  const url = getGroupLink(section, brand);
+  const wrap = document.createElement("span");
+  wrap.className = "login-control";
+  if (url) {
+    const a = document.createElement("a");
+    a.className = "login-link";
+    a.href = url; a.target = "_blank"; a.rel = "noopener";
+    a.textContent = "Login ↗";
+    wrap.appendChild(a);
+    const edit = document.createElement("button");
+    edit.className = "login-edit";
+    edit.title = "Edit login link";
+    edit.textContent = "✎";
+    edit.addEventListener("click", () => promptLogin(section, brand));
+    wrap.appendChild(edit);
+  } else {
+    const add = document.createElement("button");
+    add.className = "group-add";
+    add.textContent = "+ Login link";
+    add.addEventListener("click", () => promptLogin(section, brand));
+    wrap.appendChild(add);
+  }
+  return wrap;
+}
+
+// --- Generic sub-lists (Discount codes on Hotels/Cars, Certificates on FF) -
+function subKey(section, sl) { return section.key + sl.store; }
+
+function addSub(section, sl, brand) {
+  const key = subKey(section, sl);
+  if (!Array.isArray(WALLET[key])) WALLET[key] = [];
+  const row = { id: newRowId(), brand: brand || "" };
+  WALLET[key].push(row);
+  EDITING.add(row.id); NEW.add(row.id); DRAFTS.set(row.id, { ...row });
+  render();
+  document.querySelector(`.wallet-card[data-id="${row.id}"] .wallet-fields input, .wallet-card[data-id="${row.id}"] .wallet-fields select`)?.focus();
+}
+function commitSub(section, sl, row) {
+  const draft = DRAFTS.get(row.id) || {};
+  Object.assign(row, draft);
+  EDITING.delete(row.id); NEW.delete(row.id); DRAFTS.delete(row.id);
+  render(); saveNow();
+  const el = document.querySelector(`.wallet-card[data-id="${row.id}"]`);
+  if (el) { el.classList.add("flash"); setTimeout(() => el.classList.remove("flash"), 1100); }
+}
+function cancelSub(section, sl, row) {
+  const key = subKey(section, sl);
+  EDITING.delete(row.id); DRAFTS.delete(row.id);
+  if (NEW.has(row.id)) {
+    NEW.delete(row.id);
+    const a = WALLET[key] || [];
+    const i = a.indexOf(row);
+    if (i >= 0) a.splice(i, 1);
+  }
+  render();
+}
+function removeSub(section, sl, row) {
+  const key = subKey(section, sl);
+  const a = WALLET[key] || [];
+  const i = a.indexOf(row);
+  if (i >= 0) a.splice(i, 1);
+  EDITING.delete(row.id); DRAFTS.delete(row.id); NEW.delete(row.id);
+  render(); saveNow();
+}
+function editSub(row) {
+  EDITING.add(row.id); DRAFTS.set(row.id, { ...row });
+  render();
+  document.querySelector(`.wallet-card[data-id="${row.id}"] .wallet-fields input, .wallet-card[data-id="${row.id}"] .wallet-fields select`)?.focus();
+}
+
+function buildSublist(section, sl, active) {
+  const brand = active === "(Unspecified)" ? "" : active;
+  const key = subKey(section, sl);
+  const rows = (WALLET[key] || []).filter(r => (r.brand || "").trim() === brand);
+  rows.forEach(ensureRowId);
+
+  const wrap = document.createElement("div");
+  wrap.className = "codes-block";
+
+  const toolbar = document.createElement("div");
+  toolbar.className = "content-toolbar";
+  const title = document.createElement("span");
+  title.className = "ct-title";
+  title.textContent = sl.label;
+  toolbar.appendChild(title);
+  const add = document.createElement("button");
+  add.className = "group-add";
+  add.textContent = sl.addLabel;
+  add.addEventListener("click", () => addSub(section, sl, brand));
+  toolbar.appendChild(add);
+  wrap.appendChild(toolbar);
+
+  const list = document.createElement("div");
+  list.className = "entry-list";
+  if (!rows.length) {
+    const note = document.createElement("div");
+    note.className = "wallet-empty";
+    note.style.padding = "11px 14px";
+    note.textContent = `No ${sl.label.toLowerCase()} yet.`;
+    list.appendChild(note);
+  }
+  rows.forEach(row => {
+    list.appendChild(EDITING.has(row.id) ? buildSubEditCard(section, sl, row) : buildSubRow(section, sl, row));
+  });
+  wrap.appendChild(list);
+  return wrap;
+}
+
+function buildSubRow(section, sl, row) {
+  const el = document.createElement("div");
+  el.className = "entry-row";
+  el.dataset.id = row.id;
+
+  const handle = dragHandle();
+  const arr = WALLET[subKey(section, sl)] || [];
+  makeReorderable(el, arr, row, (row.brand || "").trim(), handle);
+
+  // Title: person name (person lists) or the first field (e.g. code name).
+  let titleText, restFields;
+  if (sl.person) { titleText = row.person ? personName(row.person) : ""; restFields = sl.fields; }
+  else { titleText = row[sl.fields[0].key] || ""; restFields = sl.fields.slice(1); }
+  const title = document.createElement("span");
+  title.className = "entry-person" + (titleText ? "" : " unassigned");
+  title.textContent = titleText || (sl.person ? "Unassigned" : "Untitled");
+  el.appendChild(title);
+
+  const numField = restFields.find(f => f.number);
+  if (numField && row[numField.key]) {
+    const detail = document.createElement("span");
+    detail.className = "entry-detail";
+    detail.textContent = row[numField.key];
+    el.appendChild(detail);
+  }
+  restFields.filter(f => !f.number && row[f.key]).forEach(f => {
+    const meta = document.createElement("span");
+    let extra = "";
+    if (f.expiry) extra = " " + expiryClass(row[f.key]);
+    else if (f.expBold) extra = " " + expBoldClass(row[f.key]);
+    meta.className = "entry-meta" + extra;
+    meta.textContent = f.bare ? row[f.key] : `${f.label}: ${row[f.key]}`;
+    el.appendChild(meta);
+  });
+
+  const actions = document.createElement("div");
+  actions.className = "entry-actions";
+  if (numField && row[numField.key]) actions.appendChild(copyBtn(() => row[numField.key], "entry-copy"));
+  const edit = document.createElement("button");
+  edit.className = "entry-edit";
+  edit.textContent = "Edit";
+  edit.addEventListener("click", () => editSub(row));
+  const x = document.createElement("button");
+  x.className = "entry-x";
+  x.title = "Remove";
+  x.textContent = "×";
+  x.addEventListener("click", () => {
+    if (!confirm("Remove this entry?")) return;
+    removeSub(section, sl, row);
+  });
+  actions.appendChild(edit);
+  actions.appendChild(x);
+  actions.appendChild(handle);
+  el.appendChild(actions);
+  return el;
+}
+
+function buildSubEditCard(section, sl, row) {
+  if (!DRAFTS.has(row.id)) DRAFTS.set(row.id, { ...row });
+  const draft = DRAFTS.get(row.id);
+
+  const card = document.createElement("div");
+  card.className = "wallet-card editing";
+  card.dataset.id = row.id;
+
+  const fields = document.createElement("div");
+  fields.className = "wallet-fields";
+  if (sl.person) fields.appendChild(buildPersonField(draft));
+  sl.fields.forEach(f => fields.appendChild(buildFieldInput(draft, f, (row.brand || "").trim())));
+  card.appendChild(fields);
+
+  card.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && e.target.tagName === "INPUT") {
+      e.preventDefault();
+      commitSub(section, sl, row);
+    }
+  });
+
+  const actions = document.createElement("div");
+  actions.className = "card-actions";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "btn-cancel";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => cancelSub(section, sl, row));
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "btn-save";
+  save.textContent = "Save";
+  save.addEventListener("click", () => commitSub(section, sl, row));
+  actions.appendChild(cancel);
+  actions.appendChild(save);
+  card.appendChild(actions);
+  return card;
+}
+
+// Shared field builders (used by sub-lists).
+function buildPersonField(draft) {
+  const wrap = document.createElement("div");
+  wrap.className = "wallet-field";
+  const label = document.createElement("label");
+  label.textContent = "Person";
+  wrap.appendChild(label);
+  const sel = document.createElement("select");
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = people().length ? "— Unassigned —" : "— Add people above —";
+  sel.appendChild(none);
+  people().forEach(p => {
+    const opt = document.createElement("option");
+    opt.value = p.id;
+    opt.textContent = p.name || "Unnamed";
+    if (draft.person === p.id) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  sel.addEventListener("change", () => { draft.person = sel.value; });
+  wrap.appendChild(sel);
+  return wrap;
+}
+function buildFieldInput(draft, f, brand) {
+  const wrap = document.createElement("div");
+  wrap.className = "wallet-field" + (f.wide ? " wide" : "");
+  const label = document.createElement("label");
+  label.textContent = f.label;
+  wrap.appendChild(label);
+  const input = document.createElement("input");
+  input.value = draft[f.key] || "";
+  input.placeholder = f.placeholder || "";
+  if (f.date) input.type = "date";
+  if (f.expiry) input.className = expiryClass(input.value);
+  if (f.suggest) {
+    const id = "dl-" + Math.random().toString(36).slice(2, 8);
+    const dl = document.createElement("datalist");
+    dl.id = id;
+    (f.suggest(brand) || []).forEach(s => {
+      const o = document.createElement("option"); o.value = s; dl.appendChild(o);
+    });
+    input.setAttribute("list", id);
+    wrap.appendChild(dl);
+  }
+  input.addEventListener("input", () => {
+    draft[f.key] = input.value;
+    if (f.expiry) input.className = expiryClass(input.value);
+  });
+  if (f.number) {
+    const numWrap = document.createElement("div");
+    numWrap.className = "wallet-field-num";
+    numWrap.appendChild(input);
+    numWrap.appendChild(copyBtn(() => input.value));
+    wrap.appendChild(numWrap);
+  } else {
+    wrap.appendChild(input);
+  }
+  return wrap;
+}
+
+function beginEdit(row) {
+  EDITING.add(row.id);
+  DRAFTS.set(row.id, { ...row });
+  render();
+  document.querySelector(`.wallet-card[data-id="${row.id}"] .wallet-fields input`)?.focus();
+}
+
+// Discard any half-started "new group" edit cards in this section (used when
+// switching sub-tabs away from an in-progress add).
+function dropLooseNew(section) {
+  const arr = WALLET[section.key] || [];
+  for (let i = arr.length - 1; i >= 0; i--) {
+    const row = arr[i];
+    const gv = (row[section.group.key] || "").trim();
+    if (NEW.has(row.id) && EDITING.has(row.id) && !gv) {
+      EDITING.delete(row.id); DRAFTS.delete(row.id); NEW.delete(row.id);
+      arr.splice(i, 1);
+    }
+  }
+}
+
+// One read-only person row inside a group: name + number + meta + actions.
+function buildEntryRow(section, row) {
+  const el = document.createElement("div");
+  el.className = "entry-row";
+  el.dataset.id = row.id;
+
+  // Drag handle (added to the actions on the right) reorders within this group.
+  const handle = dragHandle();
+  const arr = WALLET[section.key] || [];
+  makeReorderable(el, arr, row, (row[section.group.key] || "").trim(), handle);
+
+  const person = document.createElement("span");
+  const pname = row.person ? personName(row.person) : "";
+  person.className = "entry-person" + (pname ? "" : " unassigned");
+  person.textContent = pname || "Unassigned";
+  el.appendChild(person);
+
+  // Primary number, then the rest as muted meta. (Copy lives in the actions.)
+  const numField = section.fields.find(f => f.number);
+  if (numField && row[numField.key]) {
+    const num = document.createElement("span");
+    num.className = "entry-detail";
+    num.textContent = row[numField.key];
+    el.appendChild(num);
+  }
+  // Fields shown as a sub-line under another field aren't rendered on their own.
+  const skip = new Set(section.fields.filter(f => f.subDate).map(f => f.subDate));
+  section.fields.filter(f => !f.number).forEach(f => {
+    if (skip.has(f.key)) return;
+    const val = row[f.key];
+    if (!val) return;
+    if (f.subDate) {
+      const stack = document.createElement("span");
+      stack.className = "entry-meta entry-stack";
+      const top = document.createElement("span");
+      top.className = f.money ? "entry-money" : "";
+      top.textContent = f.bare ? fieldDisplay(f, val) : `${f.label}: ${fieldDisplay(f, val)}`;
+      stack.appendChild(top);
+      if (row[f.subDate]) {
+        const sub = document.createElement("span");
+        sub.className = "es-sub";
+        sub.textContent = "updated: " + fmtShortDate(row[f.subDate]);
+        stack.appendChild(sub);
+      }
+      el.appendChild(stack);
+      return;
+    }
+    const meta = document.createElement("span");
+    meta.className = "entry-meta" + (f.expiry ? " " + expiryClass(val) : "") + (f.money ? " entry-money" : "");
+    meta.textContent = f.bare ? fieldDisplay(f, val) : `${f.label}: ${fieldDisplay(f, val)}`;
+    el.appendChild(meta);
+  });
+
+  const actions = document.createElement("div");
+  actions.className = "entry-actions";
+  // Copy icon sits at the far right, just before Edit.
+  if (numField && row[numField.key]) {
+    actions.appendChild(copyBtn(() => row[numField.key], "entry-copy"));
+  }
+  const edit = document.createElement("button");
+  edit.className = "entry-edit";
+  edit.textContent = "Edit";
+  edit.addEventListener("click", () => beginEdit(row));
+  const x = document.createElement("button");
+  x.className = "entry-x";
+  x.title = "Remove";
+  x.textContent = "×";
+  x.addEventListener("click", () => {
+    if (!confirm("Remove this entry?")) return;
+    removeRow(section, row);
+  });
+  actions.appendChild(edit);
+  actions.appendChild(x);
+  actions.appendChild(handle);
+  el.appendChild(actions);
+  return el;
+}
+
+// Small clipboard-copy button shared by edit + summary views.
+const ICON_CLIPBOARD = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+const ICON_CHECK = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+
+function copyBtn(getValue, className = "icon-btn") {
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = className;
+  copy.title = "Copy to clipboard";
+  copy.setAttribute("aria-label", "Copy to clipboard");
+  copy.innerHTML = ICON_CLIPBOARD;
+  copy.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const v = getValue();
+    if (!v) return;
+    try {
+      await navigator.clipboard.writeText(v);
+      copy.innerHTML = ICON_CHECK;
+      setTimeout(() => { copy.innerHTML = ICON_CLIPBOARD; }, 1200);
+    } catch (_) { /* clipboard blocked */ }
+  });
+  return copy;
+}
+
+function commit(section, row) {
+  const draft = DRAFTS.get(row.id) || {};
+  const prev = { ...row };
+  Object.assign(row, draft);
+  // Auto-stamp a "balance updated" date (today) when the amount is first set
+  // or changed — so the user never has to type it.
+  section.fields.forEach(f => {
+    if (f.comma && row[f.key]) row[f.key] = fmtCommas(row[f.key]);
+    if (f.subDate && row[f.key] && (row[f.key] !== prev[f.key] || !row[f.subDate])) {
+      row[f.subDate] = todayISO();
+    }
+  });
+  EDITING.delete(row.id);
+  NEW.delete(row.id);
+  DRAFTS.delete(row.id);
+  // Jump to the sub-tab this entry now belongs to.
+  if (section.group) {
+    ACTIVE_GROUP[section.key] = (row[section.group.key] || "").trim() || "(Unspecified)";
+  }
+  render();
+  saveNow();
+  // Briefly highlight the freshly committed card so the save is visible.
+  const el = document.querySelector(`.wallet-card[data-id="${row.id}"]`);
+  if (el) { el.classList.add("flash"); setTimeout(() => el.classList.remove("flash"), 1100); }
+}
+
+function cancelEdit(section, row) {
+  EDITING.delete(row.id);
+  DRAFTS.delete(row.id);
+  if (NEW.has(row.id)) {
+    NEW.delete(row.id);
+    const arr = WALLET[section.key] || [];
+    const i = arr.indexOf(row);
+    if (i >= 0) arr.splice(i, 1);
+  }
+  render();
+}
+
+function removeRow(section, row) {
+  const arr = WALLET[section.key] || [];
+  const i = arr.indexOf(row);
+  if (i >= 0) arr.splice(i, 1);
+  EDITING.delete(row.id); DRAFTS.delete(row.id); NEW.delete(row.id);
+  render();
+  saveNow();
+}
+
+function buildEditCard(section, row) {
+  if (!DRAFTS.has(row.id)) DRAFTS.set(row.id, { ...row });
+  const draft = DRAFTS.get(row.id);
+
+  const card = document.createElement("div");
+  card.className = "wallet-card editing";
+  card.dataset.id = row.id;
+
+  const fields = document.createElement("div");
+  fields.className = "wallet-fields";
+
+  // Group field (airline / program / state / country) — the second level.
+  {
+    const g = section.group;
+    const wrap = document.createElement("div");
+    wrap.className = "wallet-field";
+    const label = document.createElement("label");
+    label.textContent = g.label;
+    wrap.appendChild(label);
+    const input = document.createElement("input");
+    input.value = draft[g.key] || "";
+    input.placeholder = g.placeholder || "";
+    input.addEventListener("input", () => { draft[g.key] = input.value; });
+    wrap.appendChild(input);
+    fields.appendChild(wrap);
+  }
+
+  // Person assignment — drives the show/hide filter.
+  {
+    const wrap = document.createElement("div");
+    wrap.className = "wallet-field";
+    const label = document.createElement("label");
+    label.textContent = "Person";
+    wrap.appendChild(label);
+    const sel = document.createElement("select");
+    const none = document.createElement("option");
+    none.value = "";
+    none.textContent = people().length ? "— Unassigned —" : "— Add people above —";
+    sel.appendChild(none);
+    people().forEach(p => {
+      const opt = document.createElement("option");
+      opt.value = p.id;
+      opt.textContent = p.name || "Unnamed";
+      if (draft.person === p.id) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    sel.addEventListener("change", () => { draft.person = sel.value; });
+    wrap.appendChild(sel);
+    fields.appendChild(wrap);
+  }
+
+  // Date fields that are auto-stamped (e.g. "Balance updated") aren't shown.
+  const autoSkip = new Set(section.fields.filter(f => f.subDate).map(f => f.subDate));
+  for (const f of section.fields) {
+    if (autoSkip.has(f.key)) continue;
+    const wrap = document.createElement("div");
+    wrap.className = "wallet-field" + (f.wide ? " wide" : "");
+    const label = document.createElement("label");
+    label.textContent = f.label;
+    wrap.appendChild(label);
+
+    const input = document.createElement("input");
+    input.value = draft[f.key] || "";
+    input.placeholder = f.placeholder || "";
+    if (f.date) input.type = "date";
+    if (f.expiry) input.className = expiryClass(input.value);
+    input.addEventListener("input", () => {
+      draft[f.key] = input.value;
+      if (f.expiry) input.className = expiryClass(input.value);
+    });
+
+    if (f.number) {
+      const numWrap = document.createElement("div");
+      numWrap.className = "wallet-field-num";
+      numWrap.appendChild(input);
+      numWrap.appendChild(copyBtn(() => input.value));
+      wrap.appendChild(numWrap);
+    } else {
+      wrap.appendChild(input);
+    }
+    fields.appendChild(wrap);
+  }
+  card.appendChild(fields);
+
+  // Enter anywhere in the card commits it.
+  card.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && e.target.tagName === "INPUT") {
+      e.preventDefault();
+      commit(section, row);
+    }
+  });
+
+  const actions = document.createElement("div");
+  actions.className = "card-actions";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "btn-cancel";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => cancelEdit(section, row));
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "btn-save";
+  save.textContent = "Save";
+  save.addEventListener("click", () => commit(section, row));
+  actions.appendChild(cancel);
+  actions.appendChild(save);
+  card.appendChild(actions);
+
+  return card;
+}
+
+// --- Live subscription --------------------------------------------------
+(function setupWalletSubscription() {
+  function whenFb(cb) {
+    if (window.fb) return cb();
+    const iv = setInterval(() => { if (window.fb) { clearInterval(iv); cb(); } }, 30);
+  }
+  let _unsub = null;
+  whenFb(() => {
+    window.fb.onAuth((user) => {
+      if (_unsub) { _unsub(); _unsub = null; }
+      if (!user) { WALLET = {}; render(); return; }
+      _unsub = window.fb.subscribeMyWallet((data) => {
+        // Don't clobber an in-progress edit: skip hydration while a debounced
+        // save is pending or any entry is open in the editor.
+        if (_saveTimer || EDITING.size) return;
+        _hydrating = true;
+        WALLET = data || {};
+        renderPeopleBar();
+        render();
+        _hydrating = false;
+      });
+    });
+  });
+})();
+
+buildNav();
+setupPresentModal();
+setupPersonModal();
+renderPeopleBar();
+render();
+</script>
+</body>
+</html>
