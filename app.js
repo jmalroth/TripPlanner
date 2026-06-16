@@ -13,18 +13,10 @@ let CURRENT_TRIP_ID = null;
 let IS_OWNER = false;       // signed-in user owns this trip (only they can re-share)
 let CAN_EDIT = false;       // owner OR editor-level access
 let CAN_SEE_PRICING = false; // owner, editor, viewer-pricing, or token-bearing anon
-let CURRENT_VIEWER_TOKEN = null; // populated when bootstrap saw ?v= in URL
 function STORAGE_KEY_FOR(id) { return TRIP_KEY_PREFIX + id; }
 function STORAGE_KEY() { return STORAGE_KEY_FOR(CURRENT_TRIP_ID); }
 
 function safeParse(s) { try { return JSON.parse(s); } catch (e) { return null; } }
-
-const OWNER_PASSWORD_KEY = "trip-builder-owner-password";
-function getOwnerPassword() { return localStorage.getItem(OWNER_PASSWORD_KEY) || null; }
-function setOwnerPassword(pw) {
-  if (pw) localStorage.setItem(OWNER_PASSWORD_KEY, pw);
-  else localStorage.removeItem(OWNER_PASSWORD_KEY);
-}
 
 // Wait until window.fb (firebase-client.js) has finished loading.
 function whenFb() {
@@ -34,24 +26,12 @@ function whenFb() {
   });
 }
 
-// Fetch a trip. If signed in, reads from Firestore (including pricing if
-// owner). If not signed in (anonymous ?v= viewer), falls back to the worker
-// which still serves pricing-stripped JSON to non-owners.
-async function fetchTrip(slug, viewerToken) {
+// Fetch a trip from Firestore. Anonymous public viewers use the dedicated
+// publicTrips path via window.fb.loadPublicTrip instead.
+async function fetchTrip(slug) {
   await whenFb();
-  // Anonymous viewer arriving via a shared ?v= link: keep using the worker
-  // so they can read without a Firebase account.
-  if (viewerToken && !window.fb.user) {
-    const qs = `?v=${encodeURIComponent(viewerToken)}`;
-    try {
-      const res = await fetch(`${SNAPSHOT_API}/${encodeURIComponent(slug)}${qs}`, { cache: "no-cache" });
-      if (res.status === 200) return { ok: true, status: 200, body: await res.json(), isOwner: false };
-      return { ok: false, status: res.status };
-    } catch (e) { return { ok: false, status: 0, error: e.message }; }
-  }
   if (!window.fb.user) return { ok: false, status: 401 };
-  const res = await window.fb.loadTrip(slug);
-  return res; // { ok, status, body, isOwner }
+  return window.fb.loadTrip(slug);
 }
 
 async function putTrip(slug, blob) {
@@ -60,17 +40,6 @@ async function putTrip(slug, blob) {
   return window.fb.saveTrip(slug, blob);
 }
 
-// Prompt for the owner password. Stored in localStorage so it sticks across
-// sessions on this device. Returns the password or null if cancelled.
-async function promptForPassword(reason) {
-  const msg = reason
-    ? `${reason}\n\nEnter the owner password to enable editing on this device:`
-    : "Enter the owner password to enable editing on this device:";
-  const pw = prompt(msg);
-  if (!pw) return null;
-  setOwnerPassword(pw);
-  return pw;
-}
 
 function readRegistry() {
   try {
@@ -117,7 +86,7 @@ const LANES = [
   { key: "location",   label: "Where" },
   { key: "lodging",    label: "Lodging" },
   { key: "flights",    label: "Flights" },
-  { key: "rental",     label: "Rental car", optional: true },
+  { key: "rental",     label: "Transportation", optional: true },
   { key: "activities", label: "Activities" },
 ];
 
@@ -128,7 +97,7 @@ const state = {
   events: [],
   segmentSize: "auto",
   tzAware: true,
-  homeTz: "America/Vancouver",
+  homeTz: "America/Los_Angeles",
   activeView: "main",       // "main" | "options"
   options: [],              // [{ id, name, events: [...] }]
   optionRangeStart: null,
@@ -249,7 +218,69 @@ function demojibakeWalk(v) {
 // fire from save() calls inside the load itself.
 let BOOTING = true;
 
+// Auto-add "Where" events between flights so the timeline always shows where
+// you'll be. After every save we wipe the existing auto-locations and rebuild
+// from the current flight list. User-edited or user-created locations are left
+// alone (auto events carry _autoLoc: true; if the user edits one we strip the
+// flag elsewhere so we won't clobber it next time).
+function reconcileAutoLocations() {
+  if (!Array.isArray(state.rejectedAutoLocs)) state.rejectedAutoLocs = [];
+  state.events = state.events.filter(e => !e._autoLoc);
+  const flights = state.events
+    .filter(e => e.lane === "flights"
+      && e.start && e.end
+      && !(e.title || "").toLowerCase().endsWith("layover"))
+    .sort((a, b) => (a.start + (a.startTime || "00:00")).localeCompare(b.start + (b.startTime || "00:00")));
+  if (flights.length === 0) return;
+
+  // Extract IATA code-pair from "KQ 427 SEA → GRU" / "SEA → GRU" / "SEA - GRU".
+  const extractCodes = (title) => {
+    if (!title) return null;
+    const m = title.match(/\b([A-Z]{3})\s*(?:→|->|-|–)\s*([A-Z]{3})\b/);
+    return m ? { from: m[1], to: m[2] } : null;
+  };
+
+  const hasManualLocationCovering = (start, end) => state.events.some(e =>
+    e.lane === "location" && !e._autoLoc
+    && e.start && e.end && e.start <= end && e.end >= start);
+  const isRejected = (start, end) => state.rejectedAutoLocs.some(r =>
+    r.start <= end && r.end >= start);
+
+  const palette = ["violet", "amber", "rose", "emerald", "teal", "indigo"];
+  let colorIdx = 0;
+  const toCreate = [];
+
+  for (let i = 0; i < flights.length; i++) {
+    const f = flights[i];
+    const codes = extractCodes(f.title);
+    if (!codes) continue;
+    const next = flights[i + 1];
+    // Where they are between this flight's arrival and the next flight's departure
+    // (or to trip end if this is the last flight).
+    const start = f.end;
+    const end = next ? next.start : (state.end || f.end);
+    if (!start || !end || end < start) continue;
+    if (hasManualLocationCovering(start, end)) continue;
+    if (isRejected(start, end)) continue;
+    const startTime = f.endTime || null;
+    const endTime = next ? (next.startTime || null) : null;
+    toCreate.push({
+      id: uid(),
+      title: codes.to,
+      lane: "location",
+      start,
+      end,
+      ...(startTime ? { startTime } : {}),
+      ...(endTime ? { endTime } : {}),
+      color: palette[colorIdx++ % palette.length],
+      _autoLoc: true,
+    });
+  }
+  if (toCreate.length) state.events.push(...toCreate);
+}
+
 function save() {
+  reconcileAutoLocations();
   state.modifiedAt = Date.now();
   localStorage.setItem(STORAGE_KEY(), JSON.stringify(state));
   upsertRegistry({
@@ -260,7 +291,6 @@ function save() {
   });
   if (!BOOTING) {
     scheduleSync();
-    window.RegistrySync?.schedulePush();
   }
   updateSyncIndicator();
 }
@@ -288,12 +318,6 @@ async function syncNow() {
   SYNC_PENDING = false;
   const slug = tripSlug();
   if (!slug) return;
-  // Anonymous ?v= viewer: never write back.
-  if (CURRENT_VIEWER_TOKEN && !window.fb?.user) {
-    SYNC_LAST_STATUS = null;
-    updateSyncIndicator();
-    return;
-  }
   // Not signed in (shouldn't happen — auth gate blocks). No-op.
   if (!window.fb?.user) {
     SYNC_LAST_STATUS = null;
@@ -347,15 +371,6 @@ function stripPricing(obj) {
   const copy = JSON.parse(JSON.stringify(obj));
   for (const k of PRICING_KEYS) delete copy[k];
   return copy;
-}
-
-// Cloudflare Worker — trip storage. See worker/README.md for setup.
-const SNAPSHOT_API = "https://trip-snapshots.daner1231.workers.dev";
-
-function newViewerToken() {
-  const bytes = new Uint8Array(8);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, b => b.toString(16).padStart(2, "0")).join("");
 }
 
 // Share button: show a dropdown with two URLs — the public trip link and a
@@ -437,10 +452,16 @@ function showShareDropdown() {
         <div class="export-links-input">
           <input type="text" readonly value="${url.replace(/"/g, "&quot;")}" />
           <button type="button" data-public-copy>Copy</button>
+          <button type="button" data-public-wa title="Send via WhatsApp">WhatsApp</button>
           <button type="button" data-public-disable class="ghost">Disable</button>
         </div>
         <span data-public-link-msg style="font-size:12px;color:var(--muted);"></span>
       `;
+      publicState.querySelector('[data-public-wa]').addEventListener("click", () => {
+        const tripName = state.name || "Trip";
+        const text = `${tripName}\n${url}`;
+        window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank", "noopener");
+      });
       publicState.querySelector('[data-public-copy]').addEventListener("click", async () => {
         const btn = publicState.querySelector('[data-public-copy]');
         try {
@@ -561,7 +582,7 @@ function seed() {
   state.start = "2026-06-17";
   state.end = "2026-07-09";
   state.tzAware = true;
-  state.homeTz = "America/Vancouver";
+  state.homeTz = "America/Los_Angeles";
   state.segmentSize = "auto";
   state.events = [
     // Where ----------------------------------------------------------
@@ -576,7 +597,7 @@ function seed() {
 
     // Flights & layovers ---------------------------------------------
     { id: uid(), title: "LH493 YVR → FRA", lane: "flights", color: "indigo",
-      start: "2026-06-17", startTime: "16:15", startTz: "America/Vancouver",
+      start: "2026-06-17", startTime: "16:15", startTz: "America/Los_Angeles",
       end:   "2026-06-18", endTime:   "11:00", endTz:   "Europe/Berlin",
       notes: "Lufthansa · Business (P)" },
     { id: uid(), title: "FRA layover", lane: "flights", color: "grey",
@@ -655,18 +676,203 @@ function uid() {
 
 // --- TZ map per day: which timezone is the user "in" on each day ---
 
+// IATA airport code → IANA timezone. Covers the airports we're most likely to
+// fly through; unknown codes fall back to the home tz.
+const AIRPORT_TZ = {
+  // US Eastern
+  MCO:"America/New_York", JFK:"America/New_York", LGA:"America/New_York", EWR:"America/New_York",
+  BOS:"America/New_York", IAD:"America/New_York", DCA:"America/New_York", BWI:"America/New_York",
+  PHL:"America/New_York", ATL:"America/New_York", MIA:"America/New_York", FLL:"America/New_York",
+  PBI:"America/New_York", RDU:"America/New_York", CLT:"America/New_York", TPA:"America/New_York",
+  RSW:"America/New_York", JAX:"America/New_York", SAV:"America/New_York", CMH:"America/New_York",
+  CLE:"America/New_York", PIT:"America/New_York", BUF:"America/New_York", ROC:"America/New_York",
+  SYR:"America/New_York", BTV:"America/New_York", DTW:"America/Detroit",
+  // US Central
+  ORD:"America/Chicago", MDW:"America/Chicago", DFW:"America/Chicago", DAL:"America/Chicago",
+  IAH:"America/Chicago", HOU:"America/Chicago", AUS:"America/Chicago", SAT:"America/Chicago",
+  MSY:"America/Chicago", MSP:"America/Chicago", MCI:"America/Chicago", STL:"America/Chicago",
+  BNA:"America/Chicago", MEM:"America/Chicago", OMA:"America/Chicago", OKC:"America/Chicago",
+  TUL:"America/Chicago", LIT:"America/Chicago", MKE:"America/Chicago", IND:"America/Indianapolis",
+  // US Mountain
+  DEN:"America/Denver", SLC:"America/Denver", ABQ:"America/Denver", BIL:"America/Denver",
+  COS:"America/Denver", BOI:"America/Boise",
+  // US Mountain (Arizona — no DST)
+  PHX:"America/Phoenix", TUS:"America/Phoenix",
+  // US Pacific
+  LAX:"America/Los_Angeles", SFO:"America/Los_Angeles", SAN:"America/Los_Angeles",
+  LAS:"America/Los_Angeles", OAK:"America/Los_Angeles", SJC:"America/Los_Angeles",
+  SMF:"America/Los_Angeles", BUR:"America/Los_Angeles", ONT:"America/Los_Angeles",
+  SNA:"America/Los_Angeles", PDX:"America/Los_Angeles", SEA:"America/Los_Angeles",
+  RNO:"America/Los_Angeles",
+  // US Alaska / Hawaii
+  ANC:"America/Anchorage", FAI:"America/Anchorage", JNU:"America/Juneau",
+  HNL:"Pacific/Honolulu", OGG:"Pacific/Honolulu", LIH:"Pacific/Honolulu", KOA:"Pacific/Honolulu",
+  // Canada
+  YVR:"America/Los_Angeles", YYZ:"America/Toronto", YUL:"America/Toronto",
+  YOW:"America/Toronto", YYC:"America/Edmonton", YEG:"America/Edmonton",
+  YHZ:"America/Halifax", YWG:"America/Winnipeg",
+  // Mexico / Latin America
+  MEX:"America/Mexico_City", CUN:"America/Cancun", GDL:"America/Mexico_City",
+  MTY:"America/Monterrey", SJD:"America/Mazatlan",
+  GRU:"America/Sao_Paulo", GIG:"America/Sao_Paulo", BSB:"America/Sao_Paulo",
+  EZE:"America/Argentina/Buenos_Aires", AEP:"America/Argentina/Buenos_Aires",
+  SCL:"America/Santiago", LIM:"America/Lima", BOG:"America/Bogota",
+  UIO:"America/Guayaquil", PTY:"America/Panama", SJO:"America/Costa_Rica",
+  // Europe
+  LHR:"Europe/London", LGW:"Europe/London", STN:"Europe/London", LTN:"Europe/London",
+  MAN:"Europe/London", BHX:"Europe/London", EDI:"Europe/London", GLA:"Europe/London",
+  DUB:"Europe/Dublin",
+  CDG:"Europe/Paris", ORY:"Europe/Paris", NCE:"Europe/Paris", LYS:"Europe/Paris",
+  FRA:"Europe/Berlin", MUC:"Europe/Berlin", HAM:"Europe/Berlin", DUS:"Europe/Berlin",
+  BER:"Europe/Berlin", TXL:"Europe/Berlin",
+  AMS:"Europe/Amsterdam", BRU:"Europe/Brussels",
+  MAD:"Europe/Madrid", BCN:"Europe/Madrid",
+  FCO:"Europe/Rome", MXP:"Europe/Rome", VCE:"Europe/Rome", NAP:"Europe/Rome",
+  ZRH:"Europe/Zurich", GVA:"Europe/Zurich",
+  VIE:"Europe/Vienna", PRG:"Europe/Prague", WAW:"Europe/Warsaw", BUD:"Europe/Budapest",
+  CPH:"Europe/Copenhagen", OSL:"Europe/Oslo", ARN:"Europe/Stockholm", HEL:"Europe/Helsinki",
+  ATH:"Europe/Athens", IST:"Europe/Istanbul",
+  LIS:"Europe/Lisbon", OPO:"Europe/Lisbon",
+  // Middle East
+  DXB:"Asia/Dubai", AUH:"Asia/Dubai", DOH:"Asia/Qatar", KWI:"Asia/Kuwait",
+  AMM:"Asia/Amman", TLV:"Asia/Jerusalem", RUH:"Asia/Riyadh", JED:"Asia/Riyadh",
+  // Asia
+  NRT:"Asia/Tokyo", HND:"Asia/Tokyo", KIX:"Asia/Tokyo", NGO:"Asia/Tokyo",
+  ICN:"Asia/Seoul", GMP:"Asia/Seoul",
+  PEK:"Asia/Shanghai", PVG:"Asia/Shanghai", CAN:"Asia/Shanghai", SZX:"Asia/Shanghai",
+  HKG:"Asia/Hong_Kong", MFM:"Asia/Macau", TPE:"Asia/Taipei",
+  SIN:"Asia/Singapore", KUL:"Asia/Kuala_Lumpur", BKK:"Asia/Bangkok",
+  HAN:"Asia/Ho_Chi_Minh", SGN:"Asia/Ho_Chi_Minh", MNL:"Asia/Manila",
+  CGK:"Asia/Jakarta", DPS:"Asia/Makassar",
+  DEL:"Asia/Kolkata", BOM:"Asia/Kolkata", BLR:"Asia/Kolkata", MAA:"Asia/Kolkata", HYD:"Asia/Kolkata",
+  // Africa
+  JNB:"Africa/Johannesburg", CPT:"Africa/Johannesburg", DUR:"Africa/Johannesburg",
+  NBO:"Africa/Nairobi", ADD:"Africa/Addis_Ababa",
+  JRO:"Africa/Dar_es_Salaam", ARK:"Africa/Dar_es_Salaam",
+  ZNZ:"Africa/Dar_es_Salaam", DAR:"Africa/Dar_es_Salaam",
+  CAI:"Africa/Cairo", LOS:"Africa/Lagos", ABV:"Africa/Lagos",
+  CMN:"Africa/Casablanca", RAK:"Africa/Casablanca",
+  SEZ:"Indian/Mahe", MRU:"Indian/Mauritius",
+  // Oceania
+  SYD:"Australia/Sydney", MEL:"Australia/Melbourne", BNE:"Australia/Brisbane",
+  PER:"Australia/Perth", ADL:"Australia/Adelaide",
+  AKL:"Pacific/Auckland", WLG:"Pacific/Auckland", CHC:"Pacific/Auckland",
+  NAN:"Pacific/Fiji", PPT:"Pacific/Tahiti",
+};
+
+// IATA airport code → [lat, lon, city name] for the flight map. Covers the
+// same set as AIRPORT_TZ; unknown codes get skipped on the map.
+const AIRPORT_COORDS = {
+  MCO:[28.43,-81.31,"Orlando"], JFK:[40.64,-73.78,"New York JFK"], LGA:[40.78,-73.87,"New York LGA"],
+  EWR:[40.69,-74.17,"Newark"], BOS:[42.36,-71.01,"Boston"], IAD:[38.95,-77.46,"Washington IAD"],
+  DCA:[38.85,-77.04,"Washington DCA"], BWI:[39.18,-76.67,"Baltimore"], PHL:[39.87,-75.24,"Philadelphia"],
+  ATL:[33.64,-84.43,"Atlanta"], MIA:[25.79,-80.29,"Miami"], FLL:[26.07,-80.15,"Fort Lauderdale"],
+  PBI:[26.68,-80.10,"West Palm Beach"], RDU:[35.88,-78.79,"Raleigh"], CLT:[35.21,-80.94,"Charlotte"],
+  TPA:[27.98,-82.53,"Tampa"], RSW:[26.54,-81.76,"Fort Myers"], JAX:[30.49,-81.69,"Jacksonville"],
+  CMH:[39.99,-82.89,"Columbus"], CLE:[41.41,-81.85,"Cleveland"], PIT:[40.49,-80.23,"Pittsburgh"],
+  BUF:[42.94,-78.73,"Buffalo"], DTW:[42.21,-83.35,"Detroit"],
+  ORD:[41.98,-87.91,"Chicago ORD"], MDW:[41.79,-87.75,"Chicago MDW"], DFW:[32.90,-97.04,"Dallas DFW"],
+  DAL:[32.85,-96.85,"Dallas DAL"], IAH:[29.99,-95.34,"Houston IAH"], HOU:[29.65,-95.28,"Houston HOU"],
+  AUS:[30.19,-97.67,"Austin"], SAT:[29.53,-98.47,"San Antonio"], MSY:[29.99,-90.26,"New Orleans"],
+  MSP:[44.88,-93.22,"Minneapolis"], MCI:[39.30,-94.71,"Kansas City"], STL:[38.75,-90.37,"St. Louis"],
+  BNA:[36.12,-86.68,"Nashville"], MEM:[35.04,-89.98,"Memphis"], OMA:[41.30,-95.89,"Omaha"],
+  OKC:[35.39,-97.60,"Oklahoma City"], MKE:[42.95,-87.90,"Milwaukee"], IND:[39.72,-86.29,"Indianapolis"],
+  DEN:[39.86,-104.67,"Denver"], SLC:[40.79,-111.98,"Salt Lake City"], ABQ:[35.04,-106.61,"Albuquerque"],
+  BIL:[45.81,-108.54,"Billings"], COS:[38.81,-104.70,"Colorado Springs"], BOI:[43.56,-116.22,"Boise"],
+  PHX:[33.43,-112.01,"Phoenix"], TUS:[32.12,-110.94,"Tucson"],
+  LAX:[33.94,-118.41,"Los Angeles"], SFO:[37.62,-122.38,"San Francisco"], SAN:[32.73,-117.19,"San Diego"],
+  LAS:[36.08,-115.15,"Las Vegas"], OAK:[37.72,-122.22,"Oakland"], SJC:[37.36,-121.93,"San Jose"],
+  SMF:[38.69,-121.59,"Sacramento"], BUR:[34.20,-118.36,"Burbank"], ONT:[34.06,-117.60,"Ontario CA"],
+  SNA:[33.68,-117.87,"Santa Ana"], PDX:[45.59,-122.60,"Portland"], SEA:[47.45,-122.31,"Seattle"],
+  RNO:[39.50,-119.77,"Reno"],
+  ANC:[61.17,-149.99,"Anchorage"], FAI:[64.81,-147.86,"Fairbanks"],
+  HNL:[21.32,-157.92,"Honolulu"], OGG:[20.90,-156.43,"Maui"], LIH:[21.98,-159.34,"Kauai"], KOA:[19.74,-156.05,"Kona"],
+  YVR:[49.19,-123.18,"Vancouver"], YYZ:[43.68,-79.63,"Toronto"], YUL:[45.47,-73.74,"Montreal"],
+  YOW:[45.32,-75.67,"Ottawa"], YYC:[51.11,-114.02,"Calgary"], YEG:[53.31,-113.58,"Edmonton"],
+  YHZ:[44.88,-63.51,"Halifax"], YWG:[49.91,-97.24,"Winnipeg"],
+  MEX:[19.44,-99.07,"Mexico City"], CUN:[21.04,-86.87,"Cancun"], GDL:[20.52,-103.31,"Guadalajara"],
+  MTY:[25.78,-100.11,"Monterrey"], SJD:[23.15,-109.72,"San Jose del Cabo"],
+  GRU:[-23.43,-46.48,"São Paulo"], GIG:[-22.81,-43.25,"Rio de Janeiro"], BSB:[-15.87,-47.92,"Brasília"],
+  EZE:[-34.82,-58.54,"Buenos Aires EZE"], AEP:[-34.56,-58.42,"Buenos Aires AEP"],
+  SCL:[-33.39,-70.79,"Santiago"], LIM:[-12.02,-77.11,"Lima"], BOG:[4.70,-74.14,"Bogotá"],
+  UIO:[-0.13,-78.36,"Quito"], PTY:[9.07,-79.38,"Panama City"], SJO:[9.99,-84.21,"San José CR"],
+  LHR:[51.47,-0.45,"London Heathrow"], LGW:[51.15,-0.19,"London Gatwick"], STN:[51.89,0.24,"London Stansted"],
+  LTN:[51.87,-0.37,"London Luton"], MAN:[53.36,-2.27,"Manchester"], EDI:[55.95,-3.37,"Edinburgh"],
+  DUB:[53.43,-6.27,"Dublin"],
+  CDG:[49.00,2.55,"Paris CDG"], ORY:[48.72,2.38,"Paris Orly"], NCE:[43.66,7.21,"Nice"], LYS:[45.73,5.08,"Lyon"],
+  FRA:[50.04,8.56,"Frankfurt"], MUC:[48.35,11.79,"Munich"], HAM:[53.63,10.00,"Hamburg"],
+  DUS:[51.29,6.77,"Düsseldorf"], BER:[52.36,13.51,"Berlin"], TXL:[52.55,13.29,"Berlin TXL"],
+  AMS:[52.31,4.76,"Amsterdam"], BRU:[50.90,4.48,"Brussels"],
+  MAD:[40.49,-3.57,"Madrid"], BCN:[41.30,2.08,"Barcelona"],
+  FCO:[41.80,12.25,"Rome"], MXP:[45.63,8.72,"Milan"], VCE:[45.51,12.35,"Venice"], NAP:[40.89,14.29,"Naples"],
+  ZRH:[47.46,8.55,"Zurich"], GVA:[46.24,6.11,"Geneva"],
+  VIE:[48.11,16.57,"Vienna"], PRG:[50.10,14.26,"Prague"], WAW:[52.17,20.97,"Warsaw"], BUD:[47.44,19.26,"Budapest"],
+  CPH:[55.62,12.66,"Copenhagen"], OSL:[60.19,11.10,"Oslo"], ARN:[59.65,17.92,"Stockholm"], HEL:[60.32,24.96,"Helsinki"],
+  ATH:[37.94,23.95,"Athens"], IST:[40.98,28.81,"Istanbul"],
+  LIS:[38.77,-9.13,"Lisbon"], OPO:[41.24,-8.68,"Porto"],
+  DXB:[25.25,55.36,"Dubai"], AUH:[24.43,54.65,"Abu Dhabi"], DOH:[25.27,51.62,"Doha"],
+  KWI:[29.23,47.97,"Kuwait"], AMM:[31.72,35.99,"Amman"], TLV:[32.01,34.89,"Tel Aviv"],
+  RUH:[24.96,46.70,"Riyadh"], JED:[21.68,39.15,"Jeddah"],
+  NRT:[35.77,140.39,"Tokyo Narita"], HND:[35.55,139.78,"Tokyo Haneda"], KIX:[34.43,135.24,"Osaka"], NGO:[34.86,136.81,"Nagoya"],
+  ICN:[37.46,126.44,"Seoul ICN"], GMP:[37.56,126.79,"Seoul GMP"],
+  PEK:[40.08,116.58,"Beijing"], PVG:[31.14,121.81,"Shanghai"], CAN:[23.39,113.31,"Guangzhou"], SZX:[22.64,113.81,"Shenzhen"],
+  HKG:[22.31,113.91,"Hong Kong"], MFM:[22.15,113.59,"Macau"], TPE:[25.08,121.23,"Taipei"],
+  SIN:[1.36,103.99,"Singapore"], KUL:[2.74,101.71,"Kuala Lumpur"], BKK:[13.69,100.75,"Bangkok"],
+  HAN:[21.22,105.81,"Hanoi"], SGN:[10.82,106.66,"Ho Chi Minh"], MNL:[14.51,121.02,"Manila"],
+  CGK:[-6.13,106.66,"Jakarta"], DPS:[-8.75,115.17,"Bali"],
+  DEL:[28.56,77.10,"Delhi"], BOM:[19.09,72.87,"Mumbai"], BLR:[13.20,77.71,"Bangalore"],
+  MAA:[12.99,80.17,"Chennai"], HYD:[17.24,78.43,"Hyderabad"],
+  JNB:[-26.13,28.24,"Johannesburg"], CPT:[-33.97,18.60,"Cape Town"], DUR:[-29.61,31.12,"Durban"],
+  NBO:[-1.32,36.93,"Nairobi"], JRO:[-3.43,37.07,"Kilimanjaro"], ZNZ:[-6.22,39.22,"Zanzibar"],
+  DAR:[-6.88,39.20,"Dar es Salaam"], ARK:[-3.37,36.63,"Arusha"], ADD:[8.98,38.80,"Addis Ababa"],
+  CAI:[30.11,31.41,"Cairo"], LOS:[6.58,3.32,"Lagos"], ABV:[9.01,7.27,"Abuja"],
+  CMN:[33.37,-7.59,"Casablanca"], RAK:[31.61,-8.04,"Marrakech"],
+  SEZ:[-4.67,55.52,"Mahé"], MRU:[-20.43,57.68,"Mauritius"],
+  SYD:[-33.95,151.18,"Sydney"], MEL:[-37.67,144.84,"Melbourne"], BNE:[-27.38,153.12,"Brisbane"],
+  PER:[-31.94,115.97,"Perth"], ADL:[-34.95,138.53,"Adelaide"],
+  AKL:[-37.01,174.79,"Auckland"], WLG:[-41.33,174.81,"Wellington"], CHC:[-43.49,172.53,"Christchurch"],
+  NAN:[-17.76,177.45,"Nadi"], PPT:[-17.55,-149.61,"Tahiti"],
+};
+
+// Try to resolve a string ("MCO", "Orlando MCO", "Orlando") to an IANA tz via
+// the airport map. Matches the first 3-letter all-caps code, then falls through.
+function tzFromIataLike(text) {
+  if (!text) return null;
+  // Try whole string first (case insensitive), then any standalone 3-letter token.
+  const up = text.toUpperCase();
+  if (AIRPORT_TZ[up]) return AIRPORT_TZ[up];
+  const m = up.match(/\b([A-Z]{3})\b/g);
+  if (m) {
+    for (const code of m) if (AIRPORT_TZ[code]) return AIRPORT_TZ[code];
+  }
+  return null;
+}
+
 function computeDayTzMap(start, end, events, homeTz, tzAware) {
   const map = {};
   let cur = parseDay(start);
   const endDate = parseDay(end);
   let currentTz = homeTz;
 
-  // Group flight arrivals by date (only used when tzAware).
+  // Build flight arrivals (with inferred destination tz from IATA codes if
+  // smart-parse didn't set endTz). And location events with matching titles
+  // override the tz for their full date range.
   const arrByDate = {};
+  const locOverrides = []; // [{start, end, tz}]
   if (tzAware) {
     for (const ev of events) {
-      if (ev.lane === "flights" && ev.endTz) {
-        (arrByDate[ev.end] ||= []).push(ev);
+      if (ev.lane === "flights" && ev.end && !(ev.title || "").toLowerCase().endsWith("layover")) {
+        // For flights, the arrival tz = the destination airport. Pull the
+        // arrival code out of "SEA → MCO" so we don't accidentally use the
+        // origin tz.
+        const m = (ev.title || "").match(/\b([A-Z]{3})\s*(?:→|->|-|–)\s*([A-Z]{3})\b/);
+        const destTz = m ? AIRPORT_TZ[m[2]] : null;
+        const tz = ev.endTz || destTz || tzFromIataLike(ev.notes);
+        if (tz) (arrByDate[ev.end] ||= []).push({ ...ev, _resolvedTz: tz });
+      }
+      if (ev.lane === "location" && ev.start && ev.end) {
+        const tz = ev.endTz || ev.startTz || tzFromIataLike(ev.title) || tzFromIataLike(ev.notes);
+        if (tz) locOverrides.push({ start: ev.start, end: ev.end, tz });
       }
     }
   }
@@ -676,9 +882,15 @@ function computeDayTzMap(start, end, events, homeTz, tzAware) {
     if (tzAware && arrByDate[ds] && arrByDate[ds].length) {
       const latest = arrByDate[ds].slice().sort((a, b) =>
         (a.endTime || "00:00").localeCompare(b.endTime || "00:00")).pop();
-      currentTz = latest.endTz;
+      currentTz = latest._resolvedTz || latest.endTz;
     }
-    map[ds] = currentTz;
+    // Location event overlapping this day takes priority — that's where the
+    // user *is* on that day, regardless of when the last flight landed.
+    let dayTz = currentTz;
+    for (const o of locOverrides) {
+      if (o.start <= ds && o.end >= ds) { dayTz = o.tz; break; }
+    }
+    map[ds] = dayTz;
     cur = addDays(cur, 1);
   }
   return map;
@@ -686,9 +898,29 @@ function computeDayTzMap(start, end, events, homeTz, tzAware) {
 
 // --- UTC bounds for an event ---
 
-function eventBounds(ev, dayTzMap, homeTz) {
-  const tzS = ev.startTz || dayTzMap[ev.start] || homeTz;
-  const tzE = ev.endTz   || dayTzMap[ev.end]   || homeTz;
+function eventBounds(ev, dayTzMap, homeTz, tzAware) {
+  let tzS = ev.startTz;
+  let tzE = ev.endTz;
+  // For flights without explicit per-leg tz, infer from the IATA codes in
+  // the title ("SEA → MCO") so the bar's UTC duration is the real flight
+  // duration regardless of which view mode is active.
+  if (ev.lane === "flights" && (!tzS || !tzE)) {
+    const m = (ev.title || "").match(/\b([A-Z]{3})\s*(?:→|->|-|–)\s*([A-Z]{3})\b/);
+    if (m) {
+      if (!tzS && AIRPORT_TZ[m[1]]) tzS = AIRPORT_TZ[m[1]];
+      if (!tzE && AIRPORT_TZ[m[2]]) tzE = AIRPORT_TZ[m[2]];
+    }
+  }
+  tzS = tzS || dayTzMap[ev.start] || homeTz;
+  tzE = tzE || dayTzMap[ev.end]   || homeTz;
+  // When Follow timezone is off, events that have no explicit clock times
+  // (locations, all-day activities, lodging without times) should align to
+  // the calendar grid in home tz — otherwise their UTC midnight in
+  // destination tz lands at random PST hours and pulls the bar off the day.
+  if (!tzAware && !ev.startTime && !ev.endTime) {
+    tzS = homeTz;
+    tzE = homeTz;
+  }
   const [sy, sm, sd] = ev.start.split("-").map(Number);
   const [ey, em, ed] = ev.end.split("-").map(Number);
   // Lodging without explicit times: pack against 3pm check-in / 11am
@@ -711,7 +943,7 @@ function eventBounds(ev, dayTzMap, homeTz) {
     const [h, mn] = ev.startTime.split(":").map(Number);
     sUtc = wallToUtc(sy, sm, sd, h, mn, tzS);
   } else {
-    sUtc = wallToUtc(sy, sm, sd, 0, 0, dayTzMap[ev.start] || homeTz);
+    sUtc = wallToUtc(sy, sm, sd, 0, 0, tzS);
   }
   if (ev.endTime) {
     const [h, mn] = ev.endTime.split(":").map(Number);
@@ -719,7 +951,7 @@ function eventBounds(ev, dayTzMap, homeTz) {
   } else {
     const next = toISO(addDays(parseDay(ev.end), 1));
     const [eyN, emN, edN] = next.split("-").map(Number);
-    eUtc = wallToUtc(eyN, emN, edN, 0, 0, dayTzMap[ev.end] || homeTz);
+    eUtc = wallToUtc(eyN, emN, edN, 0, 0, tzE);
   }
   return { sUtc, eUtc };
 }
@@ -808,9 +1040,54 @@ function eventLocalFracs(ev, rangeStart) {
 
 // --- Render a timeline grid (axis + lanes) for a date range ---
 
+// Resolve an event id to the root of its merge chain (so picking a child as a
+// merge target redirects to the parent it's already under).
+function resolveMergeRoot(id, eventsList) {
+  const byId = new Map(eventsList.map(e => [e.id, e]));
+  let cur = byId.get(id);
+  const seen = new Set();
+  while (cur && cur.mergedInto && byId.has(cur.mergedInto) && !seen.has(cur.id)) {
+    seen.add(cur.id);
+    cur = byId.get(cur.mergedInto);
+  }
+  return cur ? cur.id : id;
+}
+
+// Given a flat event list, hide merged children and expand each parent's date
+// range to the union of itself + all its children. The original events stay in
+// state.events untouched — this is render-time only.
+function mergeAwareEvents(events) {
+  const byId = new Map(events.map(e => [e.id, e]));
+  const childrenOf = new Map();
+  for (const ev of events) {
+    if (ev.mergedInto && byId.has(ev.mergedInto)) {
+      const root = resolveMergeRoot(ev.id, events);
+      if (root === ev.id) continue;
+      if (!childrenOf.has(root)) childrenOf.set(root, []);
+      childrenOf.get(root).push(ev);
+    }
+  }
+  return events
+    .filter(ev => !(ev.mergedInto && byId.has(ev.mergedInto)))
+    .map(ev => {
+      const kids = childrenOf.get(ev.id);
+      if (!kids?.length) return ev;
+      let start = ev.start, end = ev.end;
+      for (const k of kids) {
+        if (k.start && k.start < start) start = k.start;
+        if (k.end && k.end > end) end = k.end;
+      }
+      return { ...ev, start, end, _mergeCount: kids.length };
+    });
+}
+
 function renderTimeline(container, rangeStart, rangeEnd, opts) {
   const { dayTzMap, homeTz, dayPx, compact, tzAware } = opts;
-  const events = opts.events || state.events;
+  const events = mergeAwareEvents(opts.events || state.events);
+  // Axis labels always show destination TZ when it differs from home, so the
+  // user sees "where they'll be" even when 'Follow timezone' is off (which
+  // only affects event positioning, not labelling).
+  const displayTzMap = computeDayTzMap(rangeStart, rangeEnd, events, homeTz, true);
   const totalDays = dayDiff(rangeStart, rangeEnd) + 1;
 
   // Lane area's pixel width = container - lane label column. Used to compute
@@ -830,7 +1107,16 @@ function renderTimeline(container, rangeStart, rangeEnd, opts) {
     dayUtcBounds.push({ ds, tz, startUtc, endUtc });
   }
 
-  const visible = events.filter(ev => !(ev.end < rangeStart || ev.start > rangeEnd));
+  const visible = events.filter(ev => {
+    // 1-night lodging entries (start === end, no times) visually extend into
+    // the next morning for check-out — make sure they're still included in a
+    // breakdown segment that starts the morning after.
+    let effEnd = ev.end;
+    if (ev.lane === "lodging" && !ev.startTime && !ev.endTime && ev.start === ev.end) {
+      effEnd = toISO(addDays(parseDay(ev.end), 1));
+    }
+    return !(effEnd < rangeStart || ev.start > rangeEnd);
+  });
 
   // Compute density: a day is "active" if any non-location event touches it.
   // Location bars (long destination stays) don't count toward density.
@@ -895,7 +1181,14 @@ function renderTimeline(container, rangeStart, rangeEnd, opts) {
     cell.appendChild(el("span", "num", compact
       ? String(day.getDate())
       : `${day.toLocaleDateString(undefined, { month: "short" })} ${day.getDate()}`));
-    if (tzAware) cell.appendChild(el("span", "tz", tzShortName(tz, ds)));
+    // When Follow timezone is on, show every day's destination tz on the
+    // axis — including days you're at home (so you can see "PST" until you
+    // fly out and "EAT" after). When off, the whole trip is in home tz so
+    // the label adds no information; omit it.
+    if (tzAware) {
+      const displayTz = displayTzMap[ds] || tz || homeTz;
+      cell.appendChild(el("span", "tz", tzShortName(displayTz, ds)));
+    }
     axis.appendChild(cell);
   }
   grid.appendChild(axis);
@@ -917,23 +1210,15 @@ function renderTimeline(container, rangeStart, rangeEnd, opts) {
     }
 
     const items = laneEvents.map(ev => {
-      const { sUtc, eUtc } = eventBounds(ev, dayTzMap, homeTz);
-      return { ev, sUtc, eUtc };
-    });
-    const packed = packRowsByUtc(items);
-    const rowCount = Math.max(...packed.map(p => p.row + 1));
-    laneArea.style.setProperty("--rows", rowCount);
-
-    // Night shading (8pm–8am) per day — sits behind the event bars.
-    appendNightShades(laneArea, totalDays, dayWidths, dayOffsetsPx, shrunkSet, dayUtcBounds);
-
-    for (const { ev, sUtc, eUtc, row } of packed) {
-      // tzAware: each day cell is its own local TZ — position events by
-      // their declared local clock time within those cells (so a flight
-      // at 16:15 PDT on day 17 lands at the 16:15 mark, not pushed by the
-      // following day's TZ shift).
-      // Non-tzAware: every day is in home TZ — convert UTC to home-TZ
-      // fraction so a 11:00 Berlin arrival lands at 02:00 in the home grid.
+      // displayTzMap always holds the *real* destination tz per day (independent
+      // of state.tzAware) — pass it so event times convert from their true tz
+      // to UTC even in PST-axis mode, instead of being reinterpreted as PST.
+      const { sUtc, eUtc } = eventBounds(ev, displayTzMap, homeTz, tzAware);
+      // Compute the *visual* fracs upfront so the packer can use them. UTC
+      // bounds aren't enough when an event's lodging-packing override carves
+      // it down to a tiny morning sliver in this segment — without using the
+      // visual fracs, the packer would treat the full UTC range as occupied
+      // and bump a non-overlapping later event onto a second row.
       let leftFrac, rightFrac;
       if (tzAware) {
         ({ leftFrac, rightFrac } = eventLocalFracs(ev, rangeStart));
@@ -941,23 +1226,42 @@ function renderTimeline(container, rangeStart, rangeEnd, opts) {
         leftFrac = utcToFrac(sUtc, dayUtcBounds);
         rightFrac = utcToFrac(eUtc, dayUtcBounds);
       }
-      // Lodging without explicit times defaults to 3pm check-in / 11am
-      // check-out so hotel bars don't visually consume the full first/last
-      // day on the timeline. Doesn't change the underlying data.
       if (ev.lane === "lodging" && !ev.startTime && !ev.endTime) {
-        const startDay = Math.floor(leftFrac);
-        const endDay = Math.floor(rightFrac);
-        leftFrac = startDay + 15 / 24;
+        const startDayIdx = dayDiff(rangeStart, ev.start);
+        const endDayIdx = dayDiff(rangeStart, ev.end);
+        leftFrac = startDayIdx + 15 / 24;
         if (ev.start === ev.end) {
-          // Single-day entry implies a 1-night stay — bar extends past the
-          // start day into the next day until 11am check-out.
-          rightFrac = startDay + 1 + 11 / 24;
+          rightFrac = startDayIdx + 1 + 11 / 24;
         } else {
-          rightFrac = endDay - 1 + 11 / 24;
+          rightFrac = endDayIdx + 11 / 24;
         }
       }
-      leftFrac = Math.max(0, leftFrac);
-      rightFrac = Math.min(totalDays, rightFrac);
+      // Clip to segment so the packer compares only what's actually drawn.
+      const clippedLeft = Math.max(0, leftFrac);
+      const clippedRight = Math.min(totalDays, rightFrac);
+      return { ev, sUtc, eUtc, leftFrac, rightFrac, clippedLeft, clippedRight };
+    });
+    // Pack by visual fracs — events whose clipped visual ranges don't overlap
+    // share a row, regardless of their full UTC range.
+    items.sort((a, b) => a.clippedLeft - b.clippedLeft);
+    const rowEnds = [];
+    const packed = items.map(it => {
+      let row = 0;
+      while (row < rowEnds.length && rowEnds[row] > it.clippedLeft + 0.0001) row++;
+      rowEnds[row] = it.clippedRight;
+      return { ...it, row };
+    });
+    const rowCount = Math.max(...packed.map(p => p.row + 1));
+    laneArea.style.setProperty("--rows", rowCount);
+
+    // Night shading (8pm–8am) per day — sits behind the event bars.
+    appendNightShades(laneArea, totalDays, dayWidths, dayOffsetsPx, shrunkSet, dayUtcBounds);
+
+    for (const { ev, sUtc, eUtc, row, leftFrac: lf0, rightFrac: rf0 } of packed) {
+      // Visual fracs were already computed (with the lodging override) before
+      // packing — reuse them so packing and rendering can't disagree.
+      let leftFrac = Math.max(0, lf0);
+      let rightFrac = Math.min(totalDays, rf0);
       if (rightFrac <= leftFrac) continue;
 
       const colorVal = ev.color || "indigo";
@@ -1043,7 +1347,7 @@ function appendNightShades(laneArea, totalDays, dayWidths, dayOffsetsPx, shrunkS
 // event pills to bundle them into a single-cost line item.
 
 const pricingSelection = new Set();
-const LANE_LABEL = { location: "Where", lodging: "Lodging", flights: "Flights", rental: "Rental car", activities: "Activities" };
+const LANE_LABEL = { location: "Where", lodging: "Lodging", flights: "Flights", rental: "Transportation", activities: "Activities" };
 const LANE_ORDER = ["flights", "lodging", "rental", "activities", "location"];
 
 function fmtMoney(n) {
@@ -1069,9 +1373,30 @@ function eventToLineItem(eventId) {
     li.id !== editingLineItemId && li.eventIds.includes(eventId));
 }
 
+function ensurePricingHasOthers() {
+  if (typeof state.pricingHasOthers !== "boolean") {
+    // Heuristic for older trips: if any line item has per-group overrides
+    // or the priceSplit has more than one group, assume others are involved.
+    const hasOverrides = (state.lineItems || []).some(li =>
+      (li.pricing?.parties || []).some(p => p.name && p.name !== "Mine"));
+    const multiGroup = state.priceSplit?.groups?.length > 1;
+    state.pricingHasOthers = !!(hasOverrides || multiGroup);
+  }
+}
+
+function applyPricingHasOthersUI() {
+  const tab = document.getElementById("tab-pricing");
+  if (!tab) return;
+  tab.classList.toggle("solo", !state.pricingHasOthers);
+  const cb = document.getElementById("pricing-has-others-cb");
+  if (cb) cb.checked = !!state.pricingHasOthers;
+}
+
 function renderPricing() {
   ensureLineItems();
   ensurePriceSplit();
+  ensurePricingHasOthers();
+  applyPricingHasOthersUI();
   // Auto-prune deleted events from every line item — stops "(deleted)"
   // labels lingering after an event was removed and re-added (re-add gets
   // a new id, so the old id stays orphaned in the bundle).
@@ -1083,7 +1408,139 @@ function renderPricing() {
   renderPricingPills();
   renderPricingLineItems();
   renderPricingSummary();
+  renderSettleUp();
   renderLineItemForm();
+}
+
+// Settle-up: for each other group, net = (their fair share of all items) minus
+// (what they've already paid). Positive → they owe you; negative → you owe them.
+// A per-person checkbox marks them paid-up; clicking the pill opens a breakdown.
+function renderSettleUp() {
+  const container = document.getElementById("pricing-settle");
+  if (!container) return;
+  container.innerHTML = "";
+  ensurePriceSplit();
+  if (!state.pricingHasOthers || state.priceSplit.groups.length < 2) return;
+  if (!state.priceSettled) state.priceSettled = {};
+
+  const rows = [];
+  state.priceSplit.groups.slice(1).forEach((g, i) => {
+    const idx = i + 1;
+    let share = 0, paid = 0;
+    for (const li of state.lineItems) {
+      share += lineItemGroupAmount(li, g.id, idx);
+      paid += linePaidBy(li, g.id);
+    }
+    const net = Math.round((share - paid) * 100) / 100;
+    const settled = !!state.priceSettled[g.id];
+    if (Math.abs(net) < 0.005 && paid === 0 && !settled) return; // nothing to settle
+    rows.push({ g, idx, net, settled });
+  });
+  if (!rows.length) return;
+
+  const wrap = el("div", "settle-row");
+  wrap.appendChild(el("span", "settle-label", "Settle up:"));
+  for (const { g, idx, net, settled } of rows) {
+    const item = el("span", "settle-item");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.className = "settle-check";
+    cb.checked = settled;
+    cb.title = `Mark ${g.name} as paid up`;
+    cb.addEventListener("change", () => {
+      if (cb.checked) state.priceSettled[g.id] = true;
+      else delete state.priceSettled[g.id];
+      save();
+      renderPricing();
+    });
+    item.appendChild(cb);
+
+    const pill = el("span", "settle-pill " + (settled ? "settle-done" : net < -0.005 ? "settle-neg" : "settle-pos"));
+    if (settled) pill.textContent = `${g.name}: paid up ✓`;
+    else if (net > 0.005) pill.textContent = `${g.name} owes you ${fmtMoney(net)}`;
+    else if (net < -0.005) pill.textContent = `You owe ${g.name} ${fmtMoney(-net)}`;
+    else pill.textContent = `${g.name}: settled`;
+    pill.title = "Click for a breakdown";
+    pill.addEventListener("click", () => showSettleBreakdown(idx));
+    item.appendChild(pill);
+
+    wrap.appendChild(item);
+  }
+  container.appendChild(wrap);
+}
+
+// Modal: itemized breakdown for one group — each line item's total, their fair
+// share, and what they paid, so you can see exactly how the balance is made up.
+function showSettleBreakdown(groupIdx) {
+  const g = state.priceSplit.groups[groupIdx];
+  if (!g) return;
+  document.getElementById("settle-dialog")?.remove();
+  const dlg = document.createElement("dialog");
+  dlg.id = "settle-dialog";
+  dlg.className = "settle-dialog";
+
+  const head = el("div", "settle-dialog-head");
+  head.appendChild(el("h3", null, `Settle up · ${g.name}`));
+  const closeBtn = el("button", "settle-close", "✕");
+  closeBtn.type = "button";
+  head.appendChild(closeBtn);
+  dlg.appendChild(head);
+
+  const table = el("table", "settle-table");
+  const thead = el("thead");
+  const htr = el("tr");
+  htr.appendChild(el("th", null, "Item"));
+  htr.appendChild(el("th", "num", "Total"));
+  htr.appendChild(el("th", "num", `${g.name} share`));
+  htr.appendChild(el("th", "num", `${g.name} paid`));
+  thead.appendChild(htr);
+  table.appendChild(thead);
+
+  const tbody = el("tbody");
+  let totShare = 0, totPaid = 0, totTotal = 0, anyRow = false;
+  for (const li of state.lineItems) {
+    const share = lineItemGroupAmount(li, g.id, groupIdx);
+    const paid = linePaidBy(li, g.id);
+    if (!share && !paid) continue;
+    anyRow = true;
+    const total = lineItemTotal(li);
+    totShare += share; totPaid += paid; totTotal += total;
+    const titles = li.eventIds.map(id => state.events.find(e => e.id === id)?.title).filter(Boolean);
+    const tr = el("tr");
+    tr.appendChild(el("td", null, li.label || titles.join(" + ") || "(item)"));
+    tr.appendChild(el("td", "num", fmtMoney(total)));
+    tr.appendChild(el("td", "num", fmtMoney(share)));
+    tr.appendChild(el("td", "num " + (paid ? "settle-paid-cell" : ""), paid ? fmtMoney(paid) : "—"));
+    tbody.appendChild(tr);
+  }
+  if (!anyRow) {
+    const tr = el("tr"); const td = el("td", null, "No shared items yet."); td.colSpan = 4; tr.appendChild(td); tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+
+  const tfoot = el("tfoot");
+  const ftr = el("tr");
+  ftr.appendChild(el("td", null, "Total"));
+  ftr.appendChild(el("td", "num", fmtMoney(totTotal)));
+  ftr.appendChild(el("td", "num", fmtMoney(totShare)));
+  ftr.appendChild(el("td", "num", fmtMoney(totPaid)));
+  tfoot.appendChild(ftr);
+  table.appendChild(tfoot);
+  dlg.appendChild(table);
+
+  const net = Math.round((totShare - totPaid) * 100) / 100;
+  dlg.appendChild(el("div", "settle-verdict " + (net < -0.005 ? "settle-neg" : "settle-pos"),
+    Math.abs(net) < 0.005 ? `Settled up with ${g.name}.`
+      : net > 0 ? `${g.name} owes you ${fmtMoney(net)}`
+      : `You owe ${g.name} ${fmtMoney(-net)}`));
+  dlg.appendChild(el("div", "settle-note",
+    `The "${g.name} paid" column is what they fronted; their share of everything else is what you covered.`));
+
+  document.body.appendChild(dlg);
+  closeBtn.addEventListener("click", () => dlg.close());
+  dlg.addEventListener("click", e => { if (e.target === dlg) dlg.close(); });
+  dlg.addEventListener("close", () => dlg.remove());
+  dlg.showModal();
 }
 
 function lineItemEarliestDate(li) {
@@ -1146,10 +1603,13 @@ function renderPricingLineItems() {
   // Group line items by the dominant lane of their events.
   const byLane = {};
   for (const li of state.lineItems) {
-    const lanes = li.eventIds.map(id => state.events.find(e => e.id === id)?.lane).filter(Boolean);
-    const counts = {};
-    lanes.forEach(l => { counts[l] = (counts[l] || 0) + 1; });
-    const lane = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0] || "activities";
+    let lane = li.lane;
+    if (!lane) {
+      const lanes = li.eventIds.map(id => state.events.find(e => e.id === id)?.lane).filter(Boolean);
+      const counts = {};
+      lanes.forEach(l => { counts[l] = (counts[l] || 0) + 1; });
+      lane = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0] || "activities";
+    }
     (byLane[lane] ||= []).push(li);
   }
   for (const lane of LANE_ORDER) {
@@ -1173,25 +1633,28 @@ function renderPricingLineItems() {
     // + total + (no actions) line up vertically across header and rows.
     const right = document.createElement("span");
     right.className = "lane-subtotal-row li-right";
-    right.style.setProperty("--group-count", state.priceSplit.groups.length);
-    state.priceSplit.groups.forEach((g, gi) => {
-      const amt = lanePerGroup[gi];
-      const pill = document.createElement("span");
-      pill.className = `group-pill outline-${g.color || "indigo"}`;
-      pill.style.gridColumn = gi + 1;
-      if (amt) pill.textContent = `${g.name}: ${fmtMoney(amt)}`;
-      else pill.classList.add("empty");
-      right.appendChild(pill);
-    });
+    right.style.setProperty("--group-count", state.pricingHasOthers ? state.priceSplit.groups.length : 0);
+    if (state.pricingHasOthers) {
+      state.priceSplit.groups.forEach((g, gi) => {
+        const amt = lanePerGroup[gi];
+        const pill = document.createElement("span");
+        pill.className = `group-pill outline-${g.color || "indigo"}`;
+        pill.style.gridColumn = gi + 1;
+        if (amt) pill.textContent = `${g.name}: ${fmtMoney(amt)}`;
+        else pill.classList.add("empty");
+        right.appendChild(pill);
+      });
+    }
+    const subTotGc = (state.pricingHasOthers ? state.priceSplit.groups.length : 0) + 1;
     const subTot = document.createElement("span");
     subTot.className = "group-total li-cost";
-    subTot.style.gridColumn = state.priceSplit.groups.length + 1;
+    subTot.style.gridColumn = subTotGc;
     subTot.textContent = fmtMoney(subtotal);
     right.appendChild(subTot);
     // Empty placeholder for the actions column so totals line up with rows.
     const actionsSpacer = document.createElement("span");
     actionsSpacer.className = "li-actions actions-spacer";
-    actionsSpacer.style.gridColumn = state.priceSplit.groups.length + 2;
+    actionsSpacer.style.gridColumn = subTotGc + 1;
     right.appendChild(actionsSpacer);
     h.appendChild(right);
     group.appendChild(h);
@@ -1231,31 +1694,34 @@ function renderPricingLineItems() {
       ensurePriceSplit();
       const right = document.createElement("div");
       right.className = "li-right";
-      right.style.setProperty("--group-count", state.priceSplit.groups.length);
-      state.priceSplit.groups.forEach((g, idx) => {
-        const amt = lineItemGroupAmount(li, g.id, idx);
-        const isOverridden = li.overrides && li.overrides[g.id] != null;
-        const pill = document.createElement("span");
-        pill.className = `group-pill outline-${g.color || "indigo"}` + (isOverridden ? " overridden" : "");
-        pill.style.gridColumn = idx + 1;
-        if (amt) {
-          pill.textContent = `${g.name}: ${fmtMoney(amt)}`;
-          if (isOverridden) pill.title = "Overridden (default would be " +
-            fmtMoney((li.total || 0) * (g.share || 0)) + ")";
-        } else {
-          pill.classList.add("empty");
-        }
-        right.appendChild(pill);
-      });
+      const liGc = state.pricingHasOthers ? state.priceSplit.groups.length : 0;
+      right.style.setProperty("--group-count", liGc);
+      if (state.pricingHasOthers) {
+        state.priceSplit.groups.forEach((g, idx) => {
+          const amt = lineItemGroupAmount(li, g.id, idx);
+          const isOverridden = li.overrides && li.overrides[g.id] != null;
+          const pill = document.createElement("span");
+          pill.className = `group-pill outline-${g.color || "indigo"}` + (isOverridden ? " overridden" : "");
+          pill.style.gridColumn = idx + 1;
+          if (amt) {
+            pill.textContent = `${g.name}: ${fmtMoney(amt)}`;
+            if (isOverridden) pill.title = "Overridden (default would be " +
+              fmtMoney((li.total || 0) * (g.share || 0)) + ")";
+          } else {
+            pill.classList.add("empty");
+          }
+          right.appendChild(pill);
+        });
+      }
       const cost = document.createElement("span");
       cost.className = "li-cost";
-      cost.style.gridColumn = state.priceSplit.groups.length + 1;
+      cost.style.gridColumn = liGc + 1;
       cost.textContent = fmtMoney(lineItemTotal(li));
       right.appendChild(cost);
       // Actions also live in the grid so they align across rows.
       const actionsCol = document.createElement("span");
       actionsCol.className = "li-actions";
-      actionsCol.style.gridColumn = state.priceSplit.groups.length + 2;
+      actionsCol.style.gridColumn = liGc + 2;
       const editBtn2 = document.createElement("button");
       editBtn2.textContent = "Edit";
       editBtn2.addEventListener("click", () => editLineItem(li.id));
@@ -1303,13 +1769,15 @@ function renderPricingSummary() {
   // Single right-aligned row: per-group pills + grand total inline together.
   const row = document.createElement("div");
   row.className = "pricing-summary-row";
-  state.priceSplit.groups.forEach((g, idx) => {
-    if (!perGroup[idx]) return;
-    const pill = document.createElement("span");
-    pill.className = `group-pill summary-pill outline-${g.color || "indigo"}`;
-    pill.textContent = `${g.name}: ${fmtMoney(perGroup[idx])}`;
-    row.appendChild(pill);
-  });
+  if (state.pricingHasOthers) {
+    state.priceSplit.groups.forEach((g, idx) => {
+      if (!perGroup[idx]) return;
+      const pill = document.createElement("span");
+      pill.className = `group-pill summary-pill outline-${g.color || "indigo"}`;
+      pill.textContent = `${g.name}: ${fmtMoney(perGroup[idx])}`;
+      row.appendChild(pill);
+    });
+  }
   const total = document.createElement("span");
   total.className = "pricing-summary-total";
   total.textContent = `Total: ${fmtMoney(booked + tentativeTotal)}`;
@@ -1331,6 +1799,8 @@ function editLineItem(id) {
   pricingSelection.clear();
   li.eventIds.forEach(eid => pricingSelection.add(eid));
   document.getElementById("pricing-label").value = li.label || "";
+  const laneSel = document.getElementById("pricing-lane");
+  if (laneSel) laneSel.value = li.lane || "";
   // Load total — convert from legacy shapes if needed.
   formTotalInput = String(lineItemTotal(li) || "");
   // Load overrides.
@@ -1341,10 +1811,19 @@ function editLineItem(id) {
       else formOverrides[k] = String(v);
     }
   }
+  for (const k of Object.keys(formPaid)) delete formPaid[k];
+  if (li.paid) {
+    for (const [k, v] of Object.entries(li.paid)) formPaid[k] = String(v);
+  }
   const addBtn = document.getElementById("pricing-add-btn");
   if (addBtn) addBtn.textContent = "Save changes";
+  const heading = document.getElementById("pricing-add-heading");
+  if (heading) heading.textContent = "Edit line item";
   const cancelBtn = document.getElementById("pricing-cancel-edit");
   if (cancelBtn) cancelBtn.hidden = false;
+  // Show the bundle pills only if this item actually bundles itinerary items.
+  const bundleDetails = document.getElementById("pricing-bundle-details");
+  if (bundleDetails) bundleDetails.open = li.eventIds.length > 0;
   renderPricing();
   document.querySelector(".pricing-builder")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -1355,8 +1834,11 @@ function cancelLineItemEdit() {
   document.getElementById("pricing-label").value = "";
   formTotalInput = "";
   for (const k of Object.keys(formOverrides)) delete formOverrides[k];
+  for (const k of Object.keys(formPaid)) delete formPaid[k];
   const addBtn = document.getElementById("pricing-add-btn");
   if (addBtn) addBtn.textContent = "+ Add line item";
+  const heading = document.getElementById("pricing-add-heading");
+  if (heading) heading.textContent = "Add line item";
   const cancelBtn = document.getElementById("pricing-cancel-edit");
   if (cancelBtn) cancelBtn.hidden = true;
   renderPricing();
@@ -1513,6 +1995,14 @@ function lineItemOthersTotal(li) {
 // Working state for the add/edit line-item form.
 let formTotalInput = "";
 const formOverrides = {}; // { groupId: input string }
+const formPaid = {};      // { groupId: input string } — amount each group already paid
+
+// How much a group actually paid (fronted) toward a line item. You (the first
+// group) are the settle-up hub, so only other groups' payments are recorded;
+// anything not covered by them is treated as paid by you.
+function linePaidBy(li, gid) {
+  return (li.paid && Number(li.paid[gid])) || 0;
+}
 
 // Parse a single override input. Trailing % → percent-of-total; otherwise
 // a flat dollar amount. Returns { kind: "pct" | "amt", value } or null.
@@ -1676,6 +2166,63 @@ function renderLineItemForm() {
       orContainer.appendChild(row);
     });
   }
+  // "Who paid" rows — one per group except you (the first group / hub).
+  const paidContainer = document.getElementById("pricing-paid-rows");
+  if (paidContainer) {
+    paidContainer.innerHTML = "";
+    // Current per-group shares (so "share" can prefill the right amount).
+    const total = parseAmount(formTotalInput) || 0;
+    const ovMap = {};
+    for (const g of state.priceSplit.groups) {
+      const parsed = parseOverrideInput(formOverrides[g.id]);
+      if (parsed) ovMap[g.id] = parsed.kind === "pct" ? { pct: parsed.value } : parsed.value;
+    }
+    const { amounts } = splitWithOverrides(total, ovMap, state.priceSplit.groups);
+
+    // Header row (aligned columns, no visible table).
+    ["", "Full", "Share", "Amount"].forEach((h, i) =>
+      paidContainer.appendChild(el("span", "pp-h" + (i ? " pp-center" : ""), h)));
+
+    state.priceSplit.groups.slice(1).forEach(g => {
+      const share = Math.round((amounts[g.id] || 0) * 100) / 100;
+      const name = el("span", "or-label", g.name);
+      const full = document.createElement("input");
+      full.type = "checkbox"; full.className = "settle-check pp-center";
+      full.title = `${g.name} paid the full amount`;
+      const shareCb = document.createElement("input");
+      shareCb.type = "checkbox"; shareCb.className = "settle-check pp-center";
+      shareCb.title = `${g.name} paid their share (${fmtMoney(share)})`;
+      const input = document.createElement("input");
+      input.type = "text"; input.className = "or-input pp-amount";
+      input.placeholder = "$";
+      input.value = formPaid[g.id] || "";
+
+      const sync = () => {
+        const t = parseAmount(formTotalInput) || 0;
+        const c = parseAmount(formPaid[g.id]);
+        full.checked = t > 0 && !isNaN(c) && Math.abs(c - t) < 0.005;
+        shareCb.checked = !full.checked && share > 0 && !isNaN(c) && Math.abs(c - share) < 0.005;
+      };
+      const setAmt = (v) => {
+        if (v == null || v === "" || !(Number(v) > 0)) delete formPaid[g.id];
+        else formPaid[g.id] = String(v);
+        input.value = formPaid[g.id] || "";
+        sync();
+      };
+      sync();
+      full.addEventListener("change", () => setAmt(full.checked ? (parseAmount(formTotalInput) || 0) : ""));
+      shareCb.addEventListener("change", () => setAmt(shareCb.checked ? share : ""));
+      input.addEventListener("input", () => {
+        if (input.value === "") delete formPaid[g.id]; else formPaid[g.id] = input.value;
+        sync();
+      });
+
+      paidContainer.appendChild(name);
+      paidContainer.appendChild(full);
+      paidContainer.appendChild(shareCb);
+      paidContainer.appendChild(input);
+    });
+  }
   updateLineItemFormBreakdown();
 }
 
@@ -1721,12 +2268,14 @@ function updateLineItemFormBreakdown() {
 }
 
 function addPricingLineItem() {
-  if (pricingSelection.size === 0) {
-    alert("Select at least one item to bundle.");
-    return;
-  }
   const labelInput = document.getElementById("pricing-label");
   const total = parseAmount(formTotalInput);
+  // A line item needs either a name (a manual cost not tied to itinerary items)
+  // or one or more bundled items from the list — either is fine in any mode.
+  if (!labelInput.value.trim() && pricingSelection.size === 0) {
+    alert("Enter a name for this line item, or select items from the list to bundle.");
+    return;
+  }
   if (isNaN(total) || total <= 0) { alert("Enter a total amount."); return; }
   ensureLineItems();
   // Snapshot overrides into a plain {groupId: amount} object (parsed numbers).
@@ -1736,6 +2285,15 @@ function addPricingLineItem() {
     if (!parsed) continue;
     overrides[gid] = parsed.kind === "pct" ? { pct: parsed.value } : parsed.value;
   }
+  const laneSel = document.getElementById("pricing-lane");
+  const lane = laneSel?.value || null;
+  // Snapshot who-paid amounts (parsed dollars) keyed by group id.
+  const paid = {};
+  for (const [gid, raw] of Object.entries(formPaid)) {
+    const amt = parseAmount(raw);
+    if (!isNaN(amt) && amt > 0) paid[gid] = amt;
+  }
+  const hasPaid = Object.keys(paid).length > 0;
   if (editingLineItemId) {
     const li = state.lineItems.find(x => x.id === editingLineItemId);
     if (li) {
@@ -1743,12 +2301,16 @@ function addPricingLineItem() {
       li.label = labelInput.value.trim() || null;
       li.total = total;
       li.overrides = overrides;
+      if (hasPaid) li.paid = paid; else delete li.paid;
+      if (lane) li.lane = lane; else delete li.lane;
       delete li.cost;
       delete li.pricing;
     }
     editingLineItemId = null;
     const addBtn = document.getElementById("pricing-add-btn");
     if (addBtn) addBtn.textContent = "+ Add line item";
+    const heading = document.getElementById("pricing-add-heading");
+    if (heading) heading.textContent = "Add line item";
     const cancelBtn = document.getElementById("pricing-cancel-edit");
     if (cancelBtn) cancelBtn.hidden = true;
   } else {
@@ -1758,12 +2320,16 @@ function addPricingLineItem() {
       label: labelInput.value.trim() || null,
       total,
       overrides,
+      ...(hasPaid ? { paid } : {}),
+      ...(lane ? { lane } : {}),
     });
   }
   pricingSelection.clear();
   labelInput.value = "";
+  if (laneSel) laneSel.value = "";
   formTotalInput = "";
   for (const k of Object.keys(formOverrides)) delete formOverrides[k];
+  for (const k of Object.keys(formPaid)) delete formPaid[k];
   save();
   renderPricing();
 }
@@ -1927,6 +2493,104 @@ function addTodoBundle() {
   renderTodoList();
 }
 
+// --- flight map (Leaflet) ---
+
+let _flightMap = null;          // Leaflet map instance
+const _flightMapLayers = [];    // markers + polylines we own, to clear on re-render
+
+function renderFlightMap() {
+  const panel = document.getElementById("map-panel");
+  const container = document.getElementById("flight-map");
+  if (!panel || !container || typeof L === "undefined") return;
+
+  // Pull the destination chain out of the user's flights. Skip layover events
+  // and require a "AAA → BBB" code pair in the title to look up coordinates.
+  const flights = state.events
+    .filter(e => e.lane === "flights" && e.start && e.title
+      && !(e.title || "").toLowerCase().endsWith("layover"))
+    .sort((a, b) => (a.start + (a.startTime || "00:00"))
+      .localeCompare(b.start + (b.startTime || "00:00")));
+  const legs = [];
+  for (const f of flights) {
+    const m = (f.title || "").match(/\b([A-Z]{3})\s*(?:→|->|-|–)\s*([A-Z]{3})\b/);
+    if (!m) continue;
+    const a = AIRPORT_COORDS[m[1]];
+    const b = AIRPORT_COORDS[m[2]];
+    if (!a || !b) continue;
+    legs.push({ from: m[1], to: m[2], a, b });
+  }
+  if (legs.length === 0) {
+    panel.hidden = true;
+    if (_flightMap) { _flightMap.remove(); _flightMap = null; _flightMapLayers.length = 0; }
+    return;
+  }
+  panel.hidden = false;
+
+  if (!_flightMap) {
+    _flightMap = L.map(container, { worldCopyJump: true, scrollWheelZoom: false });
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "&copy; OpenStreetMap",
+      maxZoom: 12,
+    }).addTo(_flightMap);
+  }
+  // Clear previous markers/lines.
+  for (const layer of _flightMapLayers) _flightMap.removeLayer(layer);
+  _flightMapLayers.length = 0;
+
+  // Distinct colors per airport — cycles if you visit more than the palette.
+  const PALETTE = [
+    "#4f46e5", "#f59e0b", "#10b981", "#ef4444", "#06b6d4",
+    "#a855f7", "#ec4899", "#14b8a6", "#f97316", "#8b5cf6",
+    "#22c55e", "#0ea5e9", "#eab308", "#d946ef", "#84cc16",
+  ];
+  const colorFor = new Map();
+  const points = [];
+  const legendEntries = []; // [{code, name, color}]
+  const addAirport = (code, coords) => {
+    if (colorFor.has(code)) return;
+    const color = PALETTE[colorFor.size % PALETTE.length];
+    colorFor.set(code, color);
+    const [lat, lon, name] = coords;
+    points.push([lat, lon]);
+    legendEntries.push({ code, name, color });
+    const marker = L.circleMarker([lat, lon], {
+      radius: 7, color: "#fff", fillColor: color, fillOpacity: 1, weight: 2,
+    }).bindTooltip(`${code} — ${name}`, { direction: "top", offset: [0, -8] })
+      .addTo(_flightMap);
+    _flightMapLayers.push(marker);
+  };
+  for (const { from, to, a, b } of legs) {
+    addAirport(from, a);
+    addAirport(to, b);
+  }
+  _flightMap.fitBounds(points, { padding: [30, 30] });
+  // Leaflet needs a size invalidation after the container becomes visible.
+  setTimeout(() => { _flightMap?.invalidateSize(); }, 0);
+
+  // Render legend at bottom of the map panel.
+  const legendEl = document.getElementById("flight-map-legend");
+  if (legendEl) {
+    legendEl.innerHTML = "";
+    for (const { code, name, color } of legendEntries) {
+      const item = document.createElement("span");
+      item.className = "flight-map-legend-item";
+      const dot = document.createElement("span");
+      dot.className = "flight-map-legend-dot";
+      dot.style.background = color;
+      const codeEl = document.createElement("span");
+      codeEl.className = "flight-map-legend-code";
+      codeEl.textContent = code;
+      const nameEl = document.createElement("span");
+      nameEl.className = "flight-map-legend-name";
+      nameEl.textContent = name;
+      item.appendChild(dot);
+      item.appendChild(codeEl);
+      item.appendChild(nameEl);
+      legendEl.appendChild(item);
+    }
+  }
+}
+
 // --- breakdown segment sizing ---
 
 function chooseSegmentSize(totalDays) {
@@ -1938,12 +2602,25 @@ function chooseSegmentSize(totalDays) {
 
 // --- top-level render ---
 
+// Expand the trip's start/end so they always cover every real (non-todo) event.
+// Expand-only — a range set wider than the events is left as-is. Fixes trips
+// whose stored dates are narrower than the itinerary (e.g. a flight that departs
+// before the "Where" range) so the total-days count and timeline include it.
+function reconcileTripDates() {
+  for (const e of state.events) {
+    if (!e.start || !e.end || isTypedTodo(e)) continue;
+    if (!state.start || e.start < state.start) state.start = e.start;
+    if (!state.end || e.end > state.end) state.end = e.end;
+  }
+}
+
 function render() {
+  reconcileTripDates();
   document.getElementById("trip-name").value = state.name;
   document.getElementById("trip-start").value = state.start || "";
   document.getElementById("trip-end").value = state.end || "";
   document.getElementById("segment-size").value = state.segmentSize;
-  document.getElementById("tz-aware").checked = !!state.tzAware;
+  document.getElementById("tz-aware").checked = state.tzAware !== false;
 
   const overview = document.getElementById("overview");
   const breakdown = document.getElementById("breakdown");
@@ -1952,25 +2629,59 @@ function render() {
     overview.innerHTML = `<div class="empty-state">Set start and end dates to build your timeline.</div>`;
     breakdown.innerHTML = "";
     document.getElementById("trip-length").textContent = "";
+    const bp = document.getElementById("breakdown-panel");
+    if (bp) bp.hidden = true;
     return;
   }
 
   const totalDays = dayDiff(state.start, state.end) + 1;
   document.getElementById("trip-length").textContent = `${totalDays} day${totalDays === 1 ? "" : "s"}`;
 
-  const homeTz = state.homeTz || "UTC";
-  const tzAware = !!state.tzAware;
+  // Short trips: hide the Breakdown section entirely (overview covers it) — but
+  // the list views (day-by-day / by-type) are useful at any length, so keep the
+  // panel for those.
+  const breakdownView = ["outline", "bytype"].includes(state.breakdownView) ? state.breakdownView : "timeline";
+  const breakdownPanel = document.getElementById("breakdown-panel");
+  if (breakdownPanel) breakdownPanel.hidden = totalDays < 5 && breakdownView === "timeline";
+
+  const homeTz = state.homeTz || "America/Los_Angeles";
+  const tzAware = state.tzAware !== false;
   const dayTzMap = computeDayTzMap(state.start, state.end, state.events, homeTz, tzAware);
 
-  // Overview: stretch to panel width (no fixed day width).
+  // Overview: on desktop, stretch to fill the panel (everything fits, no
+  // scroll). On a phone, use a fixed readable day width so the timeline scrolls
+  // horizontally instead of cramming the whole trip into the narrow screen.
+  // Typed to-do items are excluded (To do tab); tentative events still show.
+  const isPhone = window.matchMedia("(max-width: 720px)").matches;
   renderTimeline(overview, state.start, state.end, {
-    dayTzMap, homeTz, dayPx: null, compact: totalDays > 14, tzAware,
+    dayTzMap, homeTz, dayPx: isPhone ? 48 : null, compact: totalDays > 14, tzAware,
+    events: timelineEvents(),
   });
+
+  renderFlightMap();
 
   renderTodoList();
 
   // Breakdown: fixed day width — short segments stay physically short.
   breakdown.innerHTML = "";
+
+  // Reflect the active view on the toggle and show/hide the "Group by" control.
+  const bToggle = document.getElementById("breakdown-view-toggle");
+  if (bToggle) bToggle.querySelectorAll("button").forEach(b =>
+    b.classList.toggle("active", b.dataset.bview === breakdownView));
+  const segCtrls = document.getElementById("segment-controls");
+  if (segCtrls) segCtrls.hidden = breakdownView !== "timeline";
+
+  // Day-by-day outline view: chronological list instead of segmented timelines.
+  if (breakdownView === "outline") {
+    renderItineraryOutline(breakdown);
+    return;
+  }
+  // By-type view: all flights, then all hotels, etc., each in date order.
+  if (breakdownView === "bytype") {
+    renderByType(breakdown);
+    return;
+  }
 
   // Region day-count summary: total days at each "Where" location, so users
   // see "Zanzibar 6d · Safari 5d · Seychelles 7d" at a glance.
@@ -1978,6 +2689,40 @@ function render() {
   if (regionRow) breakdown.appendChild(regionRow);
 
   const segSize = chooseSegmentSize(totalDays);
+
+  // If the user toggled region chips, render one segment per matching
+  // location event (using its own date range) instead of auto-segmenting.
+  if (selectedRegions.size > 0) {
+    const matches = state.events
+      .filter(ev => ev.lane === "location" && ev.start && ev.end
+        && selectedRegions.has((ev.title || "Untitled").trim()))
+      .sort((a, b) => a.start.localeCompare(b.start));
+    if (matches.length === 0) {
+      breakdown.appendChild(Object.assign(document.createElement("div"), { className: "empty-state", textContent: "No matching regions." }));
+      return;
+    }
+    const breakdownWidth = breakdown.clientWidth || 1200;
+    const laneLabelW = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--lane-label-w")) || 110;
+    const longest = matches.reduce((m, ev) => Math.max(m, dayDiff(ev.start, ev.end) + 1), 1);
+    const dayPx = Math.max(60, Math.floor((breakdownWidth - laneLabelW - 4) / longest));
+    for (const ev of matches) {
+      const segStart = ev.start;
+      const segEnd = ev.end;
+      const seg = el("div", "segment");
+      const head = el("div", "segment-head");
+      head.appendChild(el("span", "segment-title", (ev.title || "Untitled").trim()));
+      head.appendChild(el("span", "segment-range",
+        `${fmtShort(parseDay(segStart))} – ${fmtShort(parseDay(segEnd))} · ${dayDiff(segStart, segEnd) + 1} days`));
+      seg.appendChild(head);
+      const tl = el("div", "timeline");
+      seg.appendChild(tl);
+      breakdown.appendChild(seg);
+      renderTimeline(tl, segStart, segEnd, {
+        dayTzMap, homeTz, dayPx, compact: false, tzAware, events: timelineEvents(),
+      });
+    }
+    return;
+  }
 
   if (totalDays <= 7 || segSize >= totalDays) {
     breakdown.appendChild(Object.assign(document.createElement("div"), { className: "empty-state", textContent: "Trip is short — overview shows the full breakdown." }));
@@ -2022,7 +2767,7 @@ function render() {
     breakdown.appendChild(seg);
 
     renderTimeline(tl, segStart, segEnd, {
-      dayTzMap, homeTz, dayPx, compact: false, tzAware,
+      dayTzMap, homeTz, dayPx, compact: false, tzAware, events: timelineEvents(),
     });
 
     cursor = addDays(cursor, segSize);
@@ -2032,6 +2777,10 @@ function render() {
 
 // Sum days at each location ("Where" lane). Returns a chip row element, or
 // null if there are no location events.
+// Per-device UI state — which region chips are toggled on to filter the
+// breakdown. Not persisted; resets on reload.
+const selectedRegions = new Set();
+
 function renderRegionSummary() {
   const locs = state.events.filter(ev => ev.lane === "location" && ev.start && ev.end);
   if (locs.length === 0) return null;
@@ -2041,11 +2790,17 @@ function renderRegionSummary() {
     const key = (ev.title || "Untitled").trim();
     totals.set(key, (totals.get(key) || 0) + days);
   }
+  // Drop any selected regions that no longer exist (renamed/deleted).
+  for (const name of [...selectedRegions]) {
+    if (!totals.has(name)) selectedRegions.delete(name);
+  }
   const row = document.createElement("div");
   row.className = "region-summary";
   for (const [name, days] of totals) {
     const chip = document.createElement("span");
-    chip.className = "region-chip";
+    chip.className = "region-chip region-clickable";
+    if (selectedRegions.has(name)) chip.classList.add("region-selected");
+    chip.title = "Click to filter breakdown to this region";
     const lbl = document.createElement("span");
     lbl.className = "region-label";
     lbl.textContent = name;
@@ -2054,12 +2809,27 @@ function renderRegionSummary() {
     val.textContent = `${days}d`;
     chip.appendChild(lbl);
     chip.appendChild(val);
+    chip.addEventListener("click", () => {
+      if (selectedRegions.has(name)) selectedRegions.delete(name);
+      else selectedRegions.add(name);
+      render();
+    });
     row.appendChild(chip);
   }
   const total = [...totals.values()].reduce((s, n) => s + n, 0);
   const tot = document.createElement("span");
   tot.className = "region-chip region-total";
-  tot.textContent = `Total ${total}d`;
+  if (selectedRegions.size > 0) {
+    tot.classList.add("region-clickable");
+    tot.title = "Clear region filter";
+    tot.textContent = `Clear filter (${selectedRegions.size})`;
+    tot.addEventListener("click", () => {
+      selectedRegions.clear();
+      render();
+    });
+  } else {
+    tot.textContent = `Total ${total}d`;
+  }
   row.appendChild(tot);
   return row;
 }
@@ -2140,6 +2910,9 @@ function openEventDialog(id, optionId) {
   form.reset();
   const titleEl = document.getElementById("event-dialog-title");
   const deleteBtn = document.getElementById("event-delete");
+  const mergeBtn = document.getElementById("event-merge-btn");
+  const mergePanel = document.getElementById("event-merge-panel");
+  if (mergePanel) { mergePanel.hidden = true; mergePanel.innerHTML = ""; }
 
   if (id) {
     const found = findEvent(id);
@@ -2156,8 +2929,15 @@ function openEventDialog(id, optionId) {
     form.elements.endTime.value = ev.endTime || "";
     buildColorGrid(ev.color || "indigo");
     if (form.elements.tentative) form.elements.tentative.checked = !!ev.tentative;
+    if (form.elements.confirmation) form.elements.confirmation.value = ev.confirmation || "";
     form.elements.notes.value = ev.notes || "";
     deleteBtn.hidden = false;
+    // Top-level events (not inside a stand-alone Option) get the merge button.
+    if (mergeBtn) {
+      mergeBtn.hidden = !!foundOpt;
+      const hasKids = state.events.some(e => e.mergedInto === ev.id);
+      mergeBtn.textContent = hasKids ? "Unmerge" : "Merge";
+    }
   } else {
     const opt = optionId ? state.options.find(o => o.id === optionId) : null;
     titleEl.textContent = opt ? `Add event to "${opt.name}"` : "Add event";
@@ -2170,9 +2950,110 @@ function openEventDialog(id, optionId) {
     form.elements.end.value = defaultStart || "";
     buildColorGrid(optionId ? "indigo" : "emerald");
     deleteBtn.hidden = true;
+    if (mergeBtn) mergeBtn.hidden = true;
   }
   dialog.showModal();
 }
+
+// Sort key: higher = more likely merge target. Same lane heavily preferred,
+// then same start+end, then overlap, then ±1 day adjacency, then same week.
+function mergeLikelihood(target, candidate) {
+  let s = 0;
+  if (target.lane === candidate.lane) s += 1000;
+  if (target.start === candidate.start && target.end === candidate.end) s += 500;
+  // overlap
+  if (target.start <= candidate.end && target.end >= candidate.start) s += 300;
+  // ±1 day adjacency on either end
+  const d = (a, b) => Math.abs(dayDiff(a, b));
+  const adj = Math.min(d(target.end, candidate.start), d(target.start, candidate.end));
+  if (adj <= 1) s += 200;
+  else if (adj <= 7) s += 50;
+  else s -= adj;
+  return s;
+}
+
+function renderMergePanel(eventId) {
+  const panel = document.getElementById("event-merge-panel");
+  if (!panel) return;
+  const me = state.events.find(e => e.id === eventId);
+  if (!me) return;
+  panel.innerHTML = "";
+
+  // Show children-with-unmerge if this event is a parent.
+  const children = state.events.filter(e => e.mergedInto === me.id);
+  if (children.length) {
+    const head = document.createElement("div");
+    head.className = "merge-panel-head";
+    head.textContent = `Merged with ${children.length} other event${children.length === 1 ? "" : "s"}:`;
+    panel.appendChild(head);
+    for (const c of children) {
+      const row = document.createElement("div");
+      row.className = "merge-row";
+      const label = document.createElement("span");
+      label.textContent = `${c.title} — ${c.start}${c.end !== c.start ? ` → ${c.end}` : ""} (${c.lane})`;
+      row.appendChild(label);
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "ghost";
+      btn.textContent = "Unmerge";
+      btn.addEventListener("click", () => {
+        delete c.mergedInto;
+        save();
+        renderMergePanel(eventId);
+        render();
+      });
+      row.appendChild(btn);
+      panel.appendChild(row);
+    }
+  }
+
+  // Always also offer to merge another event into this one.
+  const candidates = state.events
+    .filter(e => e.id !== me.id && e.mergedInto !== me.id && !e.mergedInto)
+    .map(e => ({ ev: e, score: mergeLikelihood(me, e) }))
+    .sort((a, b) => b.score - a.score);
+  if (candidates.length) {
+    const head = document.createElement("div");
+    head.className = "merge-panel-head";
+    head.textContent = "Merge another event into this one:";
+    panel.appendChild(head);
+    for (const { ev: c } of candidates) {
+      const row = document.createElement("div");
+      row.className = "merge-row";
+      const label = document.createElement("span");
+      label.textContent = `${c.title} — ${c.start}${c.end !== c.start ? ` → ${c.end}` : ""} (${c.lane})`;
+      row.appendChild(label);
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = "Merge";
+      btn.addEventListener("click", () => {
+        c.mergedInto = me.id;
+        save();
+        renderMergePanel(eventId);
+        render();
+      });
+      row.appendChild(btn);
+      panel.appendChild(row);
+    }
+  } else if (!children.length) {
+    const empty = document.createElement("div");
+    empty.className = "merge-panel-head";
+    empty.textContent = "No other events available to merge.";
+    panel.appendChild(empty);
+  }
+}
+
+document.getElementById("event-merge-btn")?.addEventListener("click", () => {
+  const id = document.getElementById("event-form").elements.id.value;
+  if (!id) return;
+  const panel = document.getElementById("event-merge-panel");
+  if (panel.hidden) {
+    renderMergePanel(id);
+    panel.hidden = false;
+  } else {
+    panel.hidden = true;
+  }
+});
 
 form.addEventListener("submit", (e) => {
   e.preventDefault();
@@ -2194,6 +3075,8 @@ form.addEventListener("submit", (e) => {
   };
   if (data.startTime) updates.startTime = data.startTime;
   if (data.endTime) updates.endTime = data.endTime;
+  const conf = (data.confirmation || "").trim();
+  if (conf) updates.confirmation = conf;
 
   const optionId = data.optionId || null;
   const targetList = optionId
@@ -2206,6 +3089,10 @@ form.addEventListener("submit", (e) => {
       Object.assign(found.ev, updates);
       if (!data.startTime) delete found.ev.startTime;
       if (!data.endTime) delete found.ev.endTime;
+      if (!conf) delete found.ev.confirmation;
+      // If the user edits an auto-generated location, "claim" it so we don't
+      // overwrite their changes the next time flights change.
+      if (found.ev._autoLoc) delete found.ev._autoLoc;
     }
   } else {
     targetList.push({ id: uid(), ...updates });
@@ -2221,6 +3108,12 @@ document.getElementById("event-delete").addEventListener("click", () => {
   if (!id) return;
   const found = findEvent(id);
   if (found) {
+    // Remember dismissed Where events so the auto-location reconcile doesn't
+    // immediately recreate them on the next save.
+    if (!found.optionId && found.ev.lane === "location" && found.ev.start && found.ev.end) {
+      if (!Array.isArray(state.rejectedAutoLocs)) state.rejectedAutoLocs = [];
+      state.rejectedAutoLocs.push({ start: found.ev.start, end: found.ev.end });
+    }
     if (found.optionId) {
       const opt = state.options.find(o => o.id === found.optionId);
       opt.events = opt.events.filter(e => e.id !== id);
@@ -2248,6 +3141,39 @@ document.getElementById("trip-edit-done")?.addEventListener("click", () => {
   renderApp();
 });
 
+function toggleEnabledTab(key, on) {
+  if (!state.enabledTabs) state.enabledTabs = {};
+  state.enabledTabs[key] = on;
+  // Bounce off a disabled tab if it's the current view.
+  if (!on && state.activeView === key) state.activeView = "main";
+  save();
+  renderApp();
+}
+document.getElementById("trip-menu-btn")?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const menu = document.getElementById("trip-menu");
+  const btn = document.getElementById("trip-menu-btn");
+  const open = menu.hidden;
+  menu.hidden = !open;
+  btn.setAttribute("aria-expanded", String(open));
+});
+document.addEventListener("click", (e) => {
+  const menu = document.getElementById("trip-menu");
+  if (!menu || menu.hidden) return;
+  if (e.target.closest("#trip-menu") || e.target.closest("#trip-menu-btn")) return;
+  menu.hidden = true;
+  document.getElementById("trip-menu-btn")?.setAttribute("aria-expanded", "false");
+});
+document.getElementById("enable-tab-todo")?.addEventListener("change", (e) => {
+  toggleEnabledTab("todo", e.target.checked);
+});
+document.getElementById("enable-tab-options")?.addEventListener("change", (e) => {
+  toggleEnabledTab("options", e.target.checked);
+});
+document.getElementById("enable-tab-compare")?.addEventListener("change", (e) => {
+  toggleEnabledTab("compare", e.target.checked);
+});
+
 document.getElementById("trip-name").addEventListener("input", (e) => {
   state.name = e.target.value;
   save();
@@ -2267,6 +3193,13 @@ document.getElementById("segment-size").addEventListener("change", (e) => {
   saveLocal();   // breakdown grouping is per-device UI
   renderApp();
 });
+document.getElementById("breakdown-view-toggle")?.addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-bview]");
+  if (!btn) return;
+  state.breakdownView = btn.dataset.bview;
+  saveLocal();   // breakdown view choice is per-device UI
+  renderApp();
+});
 document.getElementById("tz-aware").addEventListener("change", (e) => {
   state.tzAware = e.target.checked;
   save();
@@ -2274,6 +3207,513 @@ document.getElementById("tz-aware").addEventListener("change", (e) => {
 });
 document.getElementById("add-event-btn").addEventListener("click", () => openEventDialog(null));
 document.getElementById("share-btn")?.addEventListener("click", shareTrip);
+
+// --- Printable itinerary ---
+//
+// The on-screen views are pixel-positioned timelines that print poorly, so for
+// printing we render a plain chronological list grouped by day. Multi-day items
+// (lodging, region, rental) become a one-line "ongoing" banner repeated at the
+// top of each day they span; single-day events and flights list below by time.
+
+const PRINT_LANE_ORDER = { location: 0, lodging: 1, rental: 2, activities: 3, flights: 4 };
+
+function fmtClock12(hhmm) {
+  const [h, m] = hhmm.split(":").map(Number);
+  const ap = h < 12 ? "am" : "pm";
+  let hr = h % 12;
+  if (hr === 0) hr = 12;
+  return m ? `${hr}:${String(m).padStart(2, "0")}${ap}` : `${hr}${ap}`;
+}
+
+function printTimeLabel(ev) {
+  if (ev.startTime && ev.endTime && ev.start === ev.end)
+    return `${fmtClock12(ev.startTime)}–${fmtClock12(ev.endTime)}`;
+  if (ev.startTime) return fmtClock12(ev.startTime);
+  return "";   // no time → leave the time column blank
+}
+
+// Spell out a flight's departure and arrival on one line, with timezone
+// labels (flights cross zones) and the arrival date when it lands next day.
+function flightTimesLine(ev) {
+  if (!ev.startTime && !ev.endTime) return "";
+  const tz = (zone, dateStr) => zone ? " " + tzShortName(zone, dateStr) : "";
+  const parts = [];
+  if (ev.startTime) parts.push(`Departs ${fmtClock12(ev.startTime)}${tz(ev.startTz, ev.start)}`);
+  if (ev.endTime) {
+    let a = `arrives ${fmtClock12(ev.endTime)}${tz(ev.endTz, ev.end)}`;
+    if (ev.end && ev.end !== ev.start)
+      a += ` (${parseDay(ev.end).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })})`;
+    parts.push(a);
+  }
+  return parts.join(" · ");
+}
+
+// Clock change a traveler experiences on a flight: destination UTC offset minus
+// origin UTC offset, in minutes (positive = destination is ahead). Null when we
+// can't compute it (missing timezone or times).
+function flightTzChangeMinutes(ev) {
+  if (ev.lane !== "flights" || !ev.startTz || !ev.endTz || !ev.startTime || !ev.endTime) return null;
+  const offMin = (zone, dateStr, timeStr) => {
+    const [h, mn] = timeStr.split(":").map(Number);
+    const [y, m, d] = dateStr.split("-").map(Number);
+    const naive = Date.UTC(y, m - 1, d, h, mn);
+    return Math.round((naive - wallToUtc(y, m, d, h, mn, zone)) / 60000);
+  };
+  return offMin(ev.endTz, ev.end, ev.endTime) - offMin(ev.startTz, ev.start, ev.startTime);
+}
+
+function fmtTzChange(min) {
+  if (min === 0) return "no time change";
+  const a = Math.abs(min), h = Math.floor(a / 60), m = a % 60;
+  const hm = m ? `${h}h ${m}m` : `${h}h`;
+  return `${min > 0 ? "+" : "−"}${hm} time change`;
+}
+
+// Multi-day stays/regions/rentals become the ongoing banner; flights always
+// read as timed events even when they cross midnight.
+function isOngoingEvent(ev) {
+  return ev.lane !== "flights" && dayDiff(ev.start, ev.end) >= 1;
+}
+
+// Typed to-do items (the "+ Add to-do item" box) are flagged todo:true; legacy
+// ones predating the flag match the signature the form used — a single-day
+// violet activity with no times. These are the To-do list and are kept out of
+// the timeline/breakdown/printout. Dated "still need to book" (tentative)
+// events are NOT to-dos: they stay visible (shown as tentative).
+function isTypedTodo(ev) {
+  return ev.todo === true
+    || (ev.tentative && ev.lane === "activities" && ev.color === "violet"
+        && ev.start === ev.end && !ev.startTime && !ev.endTime);
+}
+function timelineEvents() {
+  return state.events.filter(e => !isTypedTodo(e));
+}
+
+// Event length in minutes (handles crossing midnight via the dates).
+function eventDurationMin(ev) {
+  if (!ev.startTime || !ev.endTime) return null;
+  const [sh, sm] = ev.startTime.split(":").map(Number);
+  const [eh, em] = ev.endTime.split(":").map(Number);
+  return (dayDiff(ev.start, ev.end) * 1440 + eh * 60 + em) - (sh * 60 + sm);
+}
+function fmtDurMin(min) {
+  if (min == null || min < 0) return "";
+  const h = Math.floor(min / 60), m = min % 60;
+  return h ? (m ? `${h}h ${m}m` : `${h}h`) : `${m}m`;
+}
+
+// A layover sits in the flights lane but is a wait at the airport, not a
+// flight — so it doesn't get Depart/Arrive treatment. (Same title convention
+// as reconcileAutoLocations.)
+function isLayover(ev) {
+  return ev.lane === "flights" && (ev.title || "").trim().toLowerCase().endsWith("layover");
+}
+
+// Ground/water transport people sometimes file under the flights lane — these
+// are not flights, so no Depart/Arrive tag or departs→arrives line.
+const NON_FLIGHT_RX = /\b(drive|driving|transfer|train|bus|ferry|taxi|shuttle|boat)\b/i;
+function isFlightEvent(ev) {
+  return ev.lane === "flights" && !isLayover(ev) && !NON_FLIGHT_RX.test(ev.title || "");
+}
+
+// Trip name + date range header used at the top of every printout.
+function printHeader(root) {
+  const header = el("div", "print-header");
+  header.appendChild(el("h1", "print-title", state.name || "Untitled trip"));
+  if (state.start && state.end && state.end >= state.start) {
+    const fmtLong = iso => parseDay(iso).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
+    const days = dayDiff(state.start, state.end) + 1;
+    header.appendChild(el("div", "print-subtitle",
+      `${fmtLong(state.start)} – ${fmtLong(state.end)} · ${days} day${days === 1 ? "" : "s"}`));
+  }
+  root.appendChild(header);
+}
+
+function buildPrintItinerary() {
+  const root = document.getElementById("print-root");
+  if (!root) return;
+  root.innerHTML = "";
+  printHeader(root);
+  renderItineraryOutline(root);
+}
+
+function buildPrintByType() {
+  const root = document.getElementById("print-root");
+  if (!root) return;
+  root.innerHTML = "";
+  printHeader(root);
+  renderByType(root);
+}
+
+// Swap a day's row with its neighbor and persist the new manual order for that
+// day (state.dayOrder[isoDate] = [eventId, ...]). orderedIds is the day's
+// current visual order; i is the row's index, dir is -1 (up) or +1 (down).
+function moveDayRow(D, orderedIds, i, dir) {
+  const j = i + dir;
+  if (j < 0 || j >= orderedIds.length) return;
+  const ids = orderedIds.slice();
+  [ids[i], ids[j]] = [ids[j], ids[i]];
+  if (!state.dayOrder) state.dayOrder = {};
+  state.dayOrder[D] = ids;
+  save();
+  renderApp();
+}
+
+// "By type" view: group items by lane (Flights, Lodging, Transportation,
+// Activities, Where), each list in chronological order. Layovers and typed
+// to-dos are omitted; rows open the editor on click.
+function renderByType(container) {
+  if (!state.start || !state.end || state.end < state.start) {
+    container.appendChild(el("div", "outline-empty", "Set trip start and end dates to see items by type."));
+    return;
+  }
+  const events = state.events.filter(ev =>
+    ev.start && ev.end && !isTypedTodo(ev) && !isLayover(ev));
+  let any = false;
+  for (const lane of LANE_ORDER) {
+    const items = events.filter(ev => ev.lane === lane)
+      .sort((a, b) => (a.start + (a.startTime || "00:00")).localeCompare(b.start + (b.startTime || "00:00")));
+    if (!items.length) continue;
+    any = true;
+    const group = el("div", "bytype-group");
+    group.appendChild(el("div", "bytype-head", LANE_LABEL[lane] || lane));
+    for (const ev of items) {
+      const row = el("div", "outline-event");
+      const dateText = ev.start === ev.end
+        ? fmtShort(parseDay(ev.start))
+        : `${fmtShort(parseDay(ev.start))} – ${fmtShort(parseDay(ev.end))}`;
+      row.appendChild(el("span", "outline-time bytype-date", dateText));
+      const body = el("div", "outline-body");
+      const titleLine = el("div", "outline-title", ev.title || "Untitled");
+      if (ev.tentative) titleLine.appendChild(el("span", "outline-tent", " — tentative"));
+      body.appendChild(titleLine);
+      if (isFlightEvent(ev)) {
+        const fl = flightTimesLine(ev);
+        if (fl) body.appendChild(el("div", "outline-flight", fl));
+        const tc = flightTzChangeMinutes(ev);
+        const meta = [];
+        if (tc !== null) meta.push(fmtTzChange(tc));
+        if (ev.confirmation) meta.push(`Conf# ${ev.confirmation}`);
+        if (meta.length) body.appendChild(el("div", "outline-meta", meta.join(" · ")));
+      } else {
+        if (ev.confirmation) body.appendChild(el("div", "outline-meta", `Conf# ${ev.confirmation}`));
+        if (ev.notes) body.appendChild(el("div", "outline-notes", ev.notes));
+      }
+      row.appendChild(body);
+      row.addEventListener("click", () => openEventDialog(ev.id));
+      group.appendChild(row);
+    }
+    container.appendChild(group);
+  }
+  if (!any) container.appendChild(el("div", "outline-empty", "No items yet."));
+}
+
+// Build the chronological day-by-day outline into `container`. Shared by the
+// printable itinerary and the on-screen Breakdown "Day by day" view. Multi-day
+// stays/regions become an "ongoing" banner repeated atop each day they span;
+// single-day events and flights list below by time, with flight detail,
+// time-change, and confirmation lines. Rows open the editor on click.
+function renderItineraryOutline(container) {
+  if (!state.start || !state.end || state.end < state.start) {
+    container.appendChild(el("div", "outline-empty", "Set trip start and end dates to see the day-by-day outline."));
+    return;
+  }
+
+  // Typed to-do items stay in the To do tab only; tentative events are shown.
+  const events = state.events.filter(ev => ev.start && ev.end && !isTypedTodo(ev));
+  let cursor = parseDay(state.start);
+  let any = false;
+
+  while (toISO(cursor) <= state.end) {
+    const D = toISO(cursor);
+    // Regions / transportation spanning today (lodging handled separately so
+    // single-night stays show too).
+    const ongoing = events
+      .filter(ev => ev.lane !== "lodging" && isOngoingEvent(ev) && ev.start <= D && D <= ev.end);
+    // Lodging you sleep at the night of D: a single-night stay shows on its day;
+    // a multi-night stay spans check-in through the night before checkout (so it
+    // drops off the checkout day). On a transition night, the most recently
+    // checked-into hotel wins.
+    const lodgingTonight = events.filter(ev => ev.lane === "lodging"
+      && (ev.start === ev.end ? ev.start === D : (ev.start <= D && D < ev.end)));
+    if (lodgingTonight.length) {
+      ongoing.push(lodgingTonight.reduce((a, b) => (b.start > a.start ? b : a)));
+    }
+    ongoing.sort((a, b) => (PRINT_LANE_ORDER[a.lane] ?? 9) - (PRINT_LANE_ORDER[b.lane] ?? 9)
+      || (a.title || "").localeCompare(b.title || ""));
+    // Events happening today: those that start today, plus overnight flights
+    // that *land* today. A red-eye departing the 19th and arriving 6:20am on
+    // the 20th gets an "Arrive" entry on the 20th so that day isn't blank.
+    const starting = events.filter(ev =>
+      !isOngoingEvent(ev) && ev.start === D && ev.lane !== "lodging");
+    const arrivals = events.filter(ev =>
+      isFlightEvent(ev) && ev.endTime && ev.end === D && ev.end !== ev.start);
+    // Hotel check-ins: any lodging that begins today. Sorted to mid-afternoon
+    // (≈3pm) but shown without an exact time, since check-in is often 3–4pm.
+    const checkins = events.filter(ev => ev.lane === "lodging" && ev.start === D);
+    // At the same time, an arrival comes before everything else (you land, then
+    // the layover starts), and check-ins come last.
+    const kindRank = { arrival: 0, event: 1, checkin: 2 };
+    const dayEntries = [
+      ...starting.map(ev => ({ ev, kind: "event", t: ev.startTime || "00:00" })),
+      ...arrivals.map(ev => ({ ev, kind: "arrival", t: ev.endTime })),
+      ...checkins.map(ev => ({ ev, kind: "checkin", t: ev.startTime || "15:00" })),
+    ].sort((a, b) => a.t.localeCompare(b.t) || (kindRank[a.kind] - kindRank[b.kind]));
+
+    // Manual per-day ordering (set via the up/down arrows) overrides the
+    // time sort. Items not in the saved order keep their time position at the end.
+    const savedOrder = state.dayOrder?.[D];
+    if (savedOrder) {
+      dayEntries.sort((a, b) => {
+        const ia = savedOrder.indexOf(a.ev.id), ib = savedOrder.indexOf(b.ev.id);
+        if (ia === -1 && ib === -1) return 0;
+        if (ia === -1) return 1;
+        if (ib === -1) return -1;
+        return ia - ib;
+      });
+    }
+
+    if (ongoing.length || dayEntries.length) {
+      any = true;
+      const dayBlock = el("div", "outline-day");
+      dayBlock.appendChild(el("div", "outline-day-head",
+        parseDay(D).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })));
+
+      const banner = el("div", "outline-ongoing");
+      for (const ev of ongoing) {
+        const item = el("span", "outline-ongoing-item");
+        item.appendChild(el("span", "outline-ongoing-label", LANE_LABEL[ev.lane] || ev.lane));
+        item.appendChild(document.createTextNode(" " + (ev.title || "Untitled")));
+        item.addEventListener("click", () => openEventDialog(ev.id));
+        banner.appendChild(item);
+      }
+      if (banner.children.length) dayBlock.appendChild(banner);
+
+      const orderedIds = dayEntries.map(e => e.ev.id);
+      for (let index = 0; index < dayEntries.length; index++) {
+        const { ev, kind } = dayEntries[index];
+        // Only real flights get the Depart tag, departs→arrives line, and time
+        // change. Layovers and ground transport (drives, etc.) read as a plain
+        // timed row.
+        const isFlight = isFlightEvent(ev);
+        const row = el("div", "outline-event");
+        // Flights anchor on departure time; arrival rows on arrival time;
+        // check-ins read "Afternoon" (≈3pm); layovers show their duration (no
+        // timestamp); everything else uses its own time/range.
+        let timeText;
+        if (kind === "arrival") timeText = fmtClock12(ev.endTime);
+        else if (kind === "checkin") timeText = ev.startTime ? fmtClock12(ev.startTime) : "";
+        else if (isLayover(ev)) timeText = "";   // duration shown under the title instead
+        else timeText = isFlight && ev.startTime ? fmtClock12(ev.startTime) : printTimeLabel(ev);
+        row.appendChild(el("span", "outline-time", timeText));
+
+        const body = el("div", "outline-body");
+        const titleLine = el("div", "outline-title");
+        if (kind === "arrival") titleLine.appendChild(el("span", "outline-arrive-tag", "Arrive"));
+        else if (kind === "checkin") titleLine.appendChild(el("span", "outline-checkin-tag", "Check-in"));
+        else if (isFlight) titleLine.appendChild(el("span", "outline-depart-tag", "Depart"));
+        const tagged = kind === "arrival" || kind === "checkin" || isFlight;
+        titleLine.appendChild(document.createTextNode((tagged ? " " : "") + (ev.title || "Untitled")));
+        if (ev.tentative) titleLine.appendChild(el("span", "outline-tent", " — tentative"));
+        body.appendChild(titleLine);
+
+        if (kind === "arrival") {
+          // Where it came from, so the arrival makes sense without flipping back.
+          const depTz = ev.startTz ? " " + tzShortName(ev.startTz, ev.start) : "";
+          body.appendChild(el("div", "outline-flight",
+            `Overnight — departed ${parseDay(ev.start).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}`
+            + (ev.startTime ? ` ${fmtClock12(ev.startTime)}${depTz}` : "")));
+          // Time change lands on the arrival — that's when the clock actually shifts.
+          const tcArr = flightTzChangeMinutes(ev);
+          if (tcArr !== null) body.appendChild(el("div", "outline-meta", fmtTzChange(tcArr)));
+        } else if (kind === "checkin") {
+          if (ev.confirmation) body.appendChild(el("div", "outline-meta", `Conf# ${ev.confirmation}`));
+          if (ev.notes) body.appendChild(el("div", "outline-notes", ev.notes));
+        } else {
+          if (isLayover(ev)) {
+            // Auto-created layovers already carry the duration in their notes
+            // ("9hr 20min layover in …"), so only add a computed one if the
+            // title/notes don't already mention a duration — avoids doubling it.
+            const dur = fmtDurMin(eventDurationMin(ev));
+            const hasDur = /\d\s*h(r|rs|our|ours)?\b/i.test(`${ev.title || ""} ${ev.notes || ""}`);
+            if (dur && !hasDur) body.appendChild(el("div", "outline-flight", dur));
+          } else if (isFlight) {
+            const fl = flightTimesLine(ev);
+            if (fl) body.appendChild(el("div", "outline-flight", fl));
+          }
+          // Meta line: confirmation number, plus the time change for same-day
+          // flights (overnight flights show it on their Arrive row instead).
+          const meta = [];
+          const tc = (isFlight && ev.start === ev.end) ? flightTzChangeMinutes(ev) : null;
+          if (tc !== null) meta.push(fmtTzChange(tc));
+          if (ev.confirmation) meta.push(`Conf# ${ev.confirmation}`);
+          if (meta.length) body.appendChild(el("div", "outline-meta", meta.join(" · ")));
+          if (ev.notes) body.appendChild(el("div", "outline-notes", ev.notes));
+        }
+
+        row.appendChild(body);
+        row.addEventListener("click", () => openEventDialog(ev.id));
+
+        // Up/down arrows to reorder items within the day. Hidden on the printout
+        // (see CSS) and only shown when there's more than one item to reorder.
+        if (dayEntries.length > 1) {
+          const reorder = el("div", "outline-reorder");
+          const mkBtn = (glyph, dir, disabled, label) => {
+            const b = el("button", "outline-reorder-btn", glyph);
+            b.type = "button";
+            b.title = label;
+            b.setAttribute("aria-label", label);
+            b.disabled = disabled;
+            b.addEventListener("click", (e) => {
+              e.stopPropagation();
+              moveDayRow(D, orderedIds, index, dir);
+            });
+            return b;
+          };
+          reorder.appendChild(mkBtn("▲", -1, index === 0, "Move up"));
+          reorder.appendChild(mkBtn("▼", 1, index === dayEntries.length - 1, "Move down"));
+          row.appendChild(reorder);
+        }
+
+        dayBlock.appendChild(row);
+      }
+
+      container.appendChild(dayBlock);
+    }
+    cursor = addDays(cursor, 1);
+  }
+
+  if (!any) container.appendChild(el("div", "outline-empty", "No events yet."));
+}
+
+// Render the visual timeline (Whole-trip overview) into the print container.
+// The timeline positions bars in pixels from the container width at render
+// time, so we measure at a fixed landscape page width — re-rendering at the
+// 552px screen width would leave it tiny in a corner of the page.
+function buildPrintTimeline() {
+  const root = document.getElementById("print-root");
+  if (!root) return;
+  root.innerHTML = "";
+  printHeader(root);
+
+  if (!state.start || !state.end || state.end < state.start) {
+    root.appendChild(el("div", "outline-empty", "Set trip start and end dates to print a timeline."));
+    return;
+  }
+
+  // Width that fills a landscape page (Letter content ≈ 980px at 96dpi); a bit
+  // under to stay clear of margin variance across browsers/paper sizes.
+  const PRINT_W = 940;
+  const homeTz = state.homeTz || "America/Los_Angeles";
+  const tzAware = state.tzAware !== false;
+  const totalDays = dayDiff(state.start, state.end) + 1;
+  const dayTzMap = computeDayTzMap(state.start, state.end, state.events, homeTz, tzAware);
+
+  // Split a long trip into stacked rows (~2 weeks each) so the days stay wide
+  // enough to read and the whole timeline fits on one landscape page.
+  const MAX_DAYS_PER_ROW = 14;
+  const rowCount = Math.ceil(totalDays / MAX_DAYS_PER_ROW);
+  const daysPerRow = Math.ceil(totalDays / rowCount);
+
+  // Make the container measurable at the target width for the (synchronous)
+  // render; reset afterwards so @media print controls on-screen visibility.
+  root.style.display = "block";
+  root.style.width = PRINT_W + "px";
+
+  for (let r = 0; r < rowCount; r++) {
+    const rowStart = toISO(addDays(parseDay(state.start), r * daysPerRow));
+    if (rowStart > state.end) break;
+    const rowEndIso = toISO(addDays(parseDay(state.start), (r + 1) * daysPerRow - 1));
+    const rowEnd = rowEndIso > state.end ? state.end : rowEndIso;
+
+    const rowWrap = el("div", "print-tl-row");
+    if (rowCount > 1) {
+      rowWrap.appendChild(el("div", "print-tl-row-label",
+        `${fmtShort(parseDay(rowStart))} – ${fmtShort(parseDay(rowEnd))}`));
+    }
+    const tl = el("div", "timeline overview");
+    rowWrap.appendChild(tl);
+    root.appendChild(rowWrap);
+    renderTimeline(tl, rowStart, rowEnd, {
+      dayTzMap, homeTz, dayPx: null, compact: false, tzAware, events: timelineEvents(),
+    });
+  }
+
+  root.style.display = "";
+  root.style.width = "";
+}
+
+// Set the page orientation/margins for the next print. Done in JS via the
+// unnamed @page (named @page sizes aren't reliably honored by Chrome), so the
+// timeline prints landscape and the text layouts print portrait.
+function setPrintPage(orientation, marginCm) {
+  let s = document.getElementById("print-page-style");
+  if (!s) { s = document.createElement("style"); s.id = "print-page-style"; document.head.appendChild(s); }
+  s.textContent = `@page { size: ${orientation}; margin: ${marginCm}cm; }`;
+}
+
+// Print layouts: "list" is the chronological day-by-day list; "bytype" groups
+// items by category; both use the list (text) print styles in portrait.
+// "timeline" prints the visual Whole-trip overview in landscape.
+function printItinerary(mode) {
+  document.body.classList.remove("print-mode-list", "print-mode-timeline");
+  if (mode === "timeline") {
+    buildPrintTimeline();
+    document.body.classList.add("print-mode-timeline");
+    setPrintPage("landscape", 1);
+  } else if (mode === "bytype") {
+    buildPrintByType();
+    document.body.classList.add("print-mode-list");
+    setPrintPage("portrait", 1.5);
+  } else {
+    buildPrintItinerary();
+    document.body.classList.add("print-mode-list");
+    setPrintPage("portrait", 1.5);
+  }
+  window.print();
+}
+
+// Ctrl+P / browser print (no mode chosen) defaults to the chronological list.
+window.addEventListener("beforeprint", () => {
+  if (!document.body.classList.contains("print-mode-list")
+    && !document.body.classList.contains("print-mode-timeline")) {
+    buildPrintItinerary();
+    document.body.classList.add("print-mode-list");
+    setPrintPage("portrait", 1.5);
+  }
+});
+window.addEventListener("afterprint", () => {
+  document.body.classList.remove("print-mode-list", "print-mode-timeline");
+  // Drop the rendered timeline (with its live click handlers) once printed.
+  const root = document.getElementById("print-root");
+  if (root) { root.innerHTML = ""; root.style.display = ""; root.style.width = ""; }
+});
+
+(function wirePrintMenu() {
+  const btn = document.getElementById("print-btn");
+  const menu = document.getElementById("print-menu");
+  if (!btn || !menu) return;
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const open = menu.hidden;
+    menu.hidden = !open;
+    btn.setAttribute("aria-expanded", String(open));
+  });
+  document.addEventListener("click", (e) => {
+    if (menu.hidden) return;
+    if (e.target.closest("#print-menu") || e.target.closest("#print-btn")) return;
+    menu.hidden = true;
+    btn.setAttribute("aria-expanded", "false");
+  });
+  const choose = (mode) => {
+    menu.hidden = true;
+    btn.setAttribute("aria-expanded", "false");
+    printItinerary(mode);
+  };
+  document.getElementById("print-list")?.addEventListener("click", () => choose("list"));
+  document.getElementById("print-bytype")?.addEventListener("click", () => choose("bytype"));
+  document.getElementById("print-timeline")?.addEventListener("click", () => choose("timeline"));
+})();
 
 // --- Hotel comparison tab ---
 
@@ -2355,6 +3795,91 @@ function hotelGroupDescendants(rootId) {
   }
   return out;
 }
+
+function ensureRentalCompare() {
+  if (!Array.isArray(state.rentalCompare)) state.rentalCompare = [];
+}
+
+const RENTAL_FIELDS = [
+  { key: "company", label: "Company", placeholder: "Hertz / Enterprise / ..." },
+  { key: "vehicle", label: "Vehicle", placeholder: "Compact / SUV / ..." },
+  { key: "pickup", label: "Pickup", placeholder: "MCO airport" },
+  { key: "pickupDate", label: "Pickup date", placeholder: "YYYY-MM-DD" },
+  { key: "dropoff", label: "Return", placeholder: "MCO airport" },
+  { key: "dropoffDate", label: "Return date", placeholder: "YYYY-MM-DD" },
+  { key: "dailyRate", label: "Daily $", placeholder: "45" },
+  { key: "total", label: "Total $", placeholder: "315" },
+  { key: "notes", label: "Notes", placeholder: "" },
+];
+
+function renderRentalCompare() {
+  ensureRentalCompare();
+  const wrap = document.getElementById("rental-table");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  if (state.rentalCompare.length === 0) {
+    wrap.innerHTML = `<div class="empty-state">No rentals yet — click "+ Add rental" above to start comparing.</div>`;
+    return;
+  }
+  const tbl = document.createElement("table");
+  tbl.className = "compare-table";
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  for (const f of RENTAL_FIELDS) {
+    const th = document.createElement("th");
+    th.textContent = f.label;
+    headRow.appendChild(th);
+  }
+  headRow.appendChild(document.createElement("th"));
+  thead.appendChild(headRow);
+  tbl.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  for (const r of state.rentalCompare) {
+    const tr = document.createElement("tr");
+    for (const f of RENTAL_FIELDS) {
+      const td = document.createElement("td");
+      const input = document.createElement("input");
+      input.type = (f.key.endsWith("Date")) ? "date" : "text";
+      input.value = r[f.key] || "";
+      input.placeholder = f.placeholder;
+      input.addEventListener("change", () => {
+        r[f.key] = input.value;
+        save();
+      });
+      td.appendChild(input);
+      tr.appendChild(td);
+    }
+    const td = document.createElement("td");
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "ghost";
+    del.textContent = "×";
+    del.title = "Remove";
+    del.addEventListener("click", () => {
+      if (!confirm("Remove this rental from the comparison?")) return;
+      state.rentalCompare = state.rentalCompare.filter(x => x.id !== r.id);
+      save();
+      renderRentalCompare();
+    });
+    td.appendChild(del);
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+  }
+  tbl.appendChild(tbody);
+  wrap.appendChild(tbl);
+}
+
+document.getElementById("rental-add-btn")?.addEventListener("click", () => {
+  ensureRentalCompare();
+  state.rentalCompare.push({ id: uid() });
+  save();
+  renderRentalCompare();
+});
+
+document.getElementById("enable-tab-rental")?.addEventListener("change", (e) => {
+  toggleEnabledTab("rental", e.target.checked);
+});
 
 function renderHotelCompare() {
   ensureHotelCompare();
@@ -2892,17 +4417,12 @@ function renderHotelTable(hotels) {
 }
 
 async function smartParseHotelRemote(input, statusEl) {
-  let pw = getOwnerPassword();
-  if (!pw) {
-    pw = await promptForPassword("Adding a hotel needs the owner password to write back to this trip.");
-    if (!pw) {
-      statusEl.textContent = "Cancelled.";
-      statusEl.className = "paste-status error";
-      return null;
-    }
+  await whenFb();
+  if (!window.fb.user) {
+    statusEl.textContent = "Sign in to use smart parse.";
+    statusEl.className = "paste-status error";
+    return null;
   }
-  // If the entire input is a single http(s) URL, fetch the page server-side
-  // instead of asking Claude to parse the literal URL string.
   const trimmed = input.trim();
   const urlOnly = /^https?:\/\/\S+$/i.test(trimmed) && !/\s/.test(trimmed);
   const body = urlOnly
@@ -2911,14 +4431,7 @@ async function smartParseHotelRemote(input, statusEl) {
   statusEl.textContent = urlOnly ? `Fetching ${new URL(trimmed).hostname}…` : "Parsing hotel with Claude…";
   statusEl.className = "paste-status";
   try {
-    const res = await fetch(`${SNAPSHOT_API}/smart-parse`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${pw}` },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || `worker ${res.status}`);
-    return data;
+    return await window.fb.smartParse(body);
   } catch (e) {
     statusEl.textContent = `Smart parse failed: ${e.message}`;
     statusEl.className = "paste-status error";
@@ -2998,61 +4511,6 @@ document.getElementById("compare-paste-clear")?.addEventListener("click", () => 
 });
 
 // --- flight paste/parser ---
-
-const AIRPORT_TZ = {
-  YVR: "America/Vancouver",
-  SEA: "America/Los_Angeles",
-  LAX: "America/Los_Angeles",
-  JFK: "America/New_York",
-  ORD: "America/Chicago",
-  FRA: "Europe/Berlin",
-  LHR: "Europe/London",
-  CDG: "Europe/Paris",
-  AMS: "Europe/Amsterdam",
-  ZNZ: "Africa/Dar_es_Salaam",
-  ARK: "Africa/Dar_es_Salaam",
-  JRO: "Africa/Dar_es_Salaam",
-  DAR: "Africa/Dar_es_Salaam",
-  NBO: "Africa/Nairobi",
-  ADD: "Africa/Addis_Ababa",
-  CPT: "Africa/Johannesburg",
-  JNB: "Africa/Johannesburg",
-  SEZ: "Indian/Mahe",
-  MRU: "Indian/Mauritius",
-  CAI: "Africa/Cairo",
-  DXB: "Asia/Dubai",
-  DOH: "Asia/Qatar",
-  IST: "Europe/Istanbul",
-  // US domestic
-  TPA: "America/New_York",
-  MIA: "America/New_York",
-  ATL: "America/New_York",
-  BOS: "America/New_York",
-  PHL: "America/New_York",
-  IAD: "America/New_York",
-  DCA: "America/New_York",
-  CLT: "America/New_York",
-  MCO: "America/New_York",
-  FLL: "America/New_York",
-  DTW: "America/Detroit",
-  MSP: "America/Chicago",
-  DFW: "America/Chicago",
-  IAH: "America/Chicago",
-  AUS: "America/Chicago",
-  MSY: "America/Chicago",
-  STL: "America/Chicago",
-  MCI: "America/Chicago",
-  MEM: "America/Chicago",
-  DEN: "America/Denver",
-  SLC: "America/Denver",
-  PHX: "America/Phoenix",
-  LAS: "America/Los_Angeles",
-  SFO: "America/Los_Angeles",
-  SAN: "America/Los_Angeles",
-  PDX: "America/Los_Angeles",
-  HNL: "Pacific/Honolulu",
-  ANC: "America/Anchorage",
-};
 
 // City name → IATA code, for parsers that get city names instead of codes.
 const CITY_TO_CODE = {
@@ -3930,7 +5388,7 @@ function fmtHours(ms) {
 }
 
 function summarizeOption(opt) {
-  const homeTz = state.homeTz || "UTC";
+  const homeTz = state.homeTz || "America/Los_Angeles";
   const flights = opt.events.filter(e =>
     e.lane === "flights" && !e.title.endsWith("layover"));
   const layovers = opt.events.filter(e =>
@@ -3957,7 +5415,7 @@ function summarizeOption(opt) {
 }
 
 function deriveLocationsForOption(opt) {
-  const homeTz = state.homeTz || "UTC";
+  const homeTz = state.homeTz || "America/Los_Angeles";
   const flights = opt.events.filter(e =>
     e.lane === "flights" && !e.title.endsWith("layover"));
   const layovers = opt.events.filter(e =>
@@ -4139,8 +5597,8 @@ function renderOptions() {
     return;
   }
 
-  const homeTz = state.homeTz || "UTC";
-  const tzAware = !!state.tzAware;
+  const homeTz = state.homeTz || "America/Los_Angeles";
+  const tzAware = state.tzAware !== false;
   const dayTzMap = computeDayTzMap(state.start, state.end, state.events, homeTz, tzAware);
 
   for (const group of state.optionGroups.filter(g => g.id === activeOptionGroupId)) {
@@ -4441,7 +5899,15 @@ function renderApp() {
   document.getElementById("trip-name").value = state.name || "";
   document.getElementById("trip-start").value = state.start || "";
   document.getElementById("trip-end").value = state.end || "";
-  document.getElementById("tz-aware").checked = !!state.tzAware;
+  document.getElementById("tz-aware").checked = state.tzAware !== false;
+  const todoCb = document.getElementById("enable-tab-todo");
+  const optCb = document.getElementById("enable-tab-options");
+  const cmpCb = document.getElementById("enable-tab-compare");
+  const rntCb = document.getElementById("enable-tab-rental");
+  if (todoCb) todoCb.checked = state.enabledTabs?.todo !== false;
+  if (optCb) optCb.checked = state.enabledTabs?.options !== false;
+  if (cmpCb) cmpCb.checked = state.enabledTabs?.compare !== false;
+  if (rntCb) rntCb.checked = state.enabledTabs?.rental === true;
   // Refresh the click-to-edit display row.
   const displayName = document.getElementById("trip-display-name");
   const displayDates = document.getElementById("trip-display-dates");
@@ -4466,7 +5932,12 @@ function renderApp() {
   const editorTabsAllowed = CAN_EDIT;
   const allowedTabs = new Set(["main"]);
   if (pricingAllowed) allowedTabs.add("pricing");
-  if (editorTabsAllowed) { allowedTabs.add("todo"); allowedTabs.add("options"); allowedTabs.add("compare"); }
+  if (editorTabsAllowed) {
+    if (state.enabledTabs?.todo !== false) allowedTabs.add("todo");
+    if (state.enabledTabs?.options !== false) allowedTabs.add("options");
+    if (state.enabledTabs?.compare !== false) allowedTabs.add("compare");
+    if (state.enabledTabs?.rental === true) allowedTabs.add("rental");
+  }
   if (!allowedTabs.has(state.activeView)) state.activeView = "main";
   document.querySelectorAll(".tab-btn").forEach(b => {
     b.hidden = !allowedTabs.has(b.dataset.tab);
@@ -4477,6 +5948,7 @@ function renderApp() {
   document.getElementById("tab-pricing").hidden = !pricingAllowed || state.activeView !== "pricing";
   document.getElementById("tab-options").hidden = !allowedTabs.has("options") || state.activeView !== "options";
   document.getElementById("tab-compare").hidden = !allowedTabs.has("compare") || state.activeView !== "compare";
+  document.getElementById("tab-rental").hidden = !allowedTabs.has("rental") || state.activeView !== "rental";
 
   updateSyncIndicator();
 
@@ -4484,6 +5956,7 @@ function renderApp() {
   else if (state.activeView === "todo") renderTodoList();
   else if (state.activeView === "pricing") renderPricing();
   else if (state.activeView === "compare") renderHotelCompare();
+  else if (state.activeView === "rental") renderRentalCompare();
   else renderOptions();
 
   window.scrollTo({ top: scrollY, behavior: "instant" });
@@ -4513,6 +5986,7 @@ document.getElementById("todo-add-form")?.addEventListener("submit", (e) => {
     start: day,
     end: day,
     tentative: true,
+    todo: true,   // typed to-do — keep it out of the timeline/breakdown
   });
   input.value = "";
   save();
@@ -4521,6 +5995,12 @@ document.getElementById("todo-add-form")?.addEventListener("submit", (e) => {
   document.getElementById("todo-add-input")?.focus();
 });
 
+document.getElementById("pricing-has-others-cb")?.addEventListener("change", (e) => {
+  state.pricingHasOthers = e.target.checked;
+  if (!state.pricingHasOthers) pricingSelection.clear();
+  save();
+  renderPricing();
+});
 document.getElementById("pricing-add-btn")?.addEventListener("click", addPricingLineItem);
 document.getElementById("pricing-clear-sel")?.addEventListener("click", () => {
   pricingSelection.clear();
@@ -4575,28 +6055,18 @@ document.getElementById("add-option-btn")?.addEventListener("click", () => {
 });
 
 async function smartParseRemote(text, statusEl, existingEvents) {
-  let pw = getOwnerPassword();
-  if (!pw) {
-    pw = await promptForPassword("Smart parse needs the owner password to write back to this trip.");
-    if (!pw) {
-      statusEl.textContent = "Cancelled.";
-      statusEl.className = "paste-status error";
-      return null;
-    }
+  await whenFb();
+  if (!window.fb.user) {
+    statusEl.textContent = "Sign in to use smart parse.";
+    statusEl.className = "paste-status error";
+    return null;
   }
   statusEl.textContent = existingEvents ? "Asking Claude to patch existing events…" : "Parsing with Claude…";
   statusEl.className = "paste-status";
   try {
     const body = { text, tripStart: state.start || null, tripEnd: state.end || null };
     if (existingEvents) body.existingEvents = existingEvents;
-    const res = await fetch(`${SNAPSHOT_API}/smart-parse`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${pw}` },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || `worker ${res.status}`);
-    return data;
+    return await window.fb.smartParse(body);
   } catch (e) {
     statusEl.textContent = `Smart parse failed: ${e.message}`;
     statusEl.className = "paste-status error";
@@ -4658,16 +6128,24 @@ function wirePasteBlock({ inputId, parseId, clearId, statusId, targetId, smartId
       const data = await smartParseRemote(text, status);
       smartBtn.disabled = false;
       if (!data) return;
-      const events = (data.events || []).map(e => ({
-        id: uid(),
-        title: e.title || "Event",
-        lane: ["flights","lodging","activities","rental","location"].includes(e.lane) ? e.lane : "activities",
-        color: e.lane === "flights" ? "indigo" : e.lane === "lodging" ? "amber" : e.lane === "rental" ? "orange" : e.lane === "location" ? "violet" : "emerald",
-        start: e.start, end: e.end || e.start,
-        ...(e.startTime ? { startTime: e.startTime } : {}),
-        ...(e.endTime ? { endTime: e.endTime } : {}),
-        notes: e.notes || "Parsed by Claude",
-      })).filter(e => e.start && /^\d{4}-\d{2}-\d{2}$/.test(e.start));
+      const events = (data.events || []).map(e => {
+        const isLayover = e.lane === "flights" && (e.title || "").toLowerCase().endsWith("layover");
+        return {
+          id: uid(),
+          title: e.title || "Event",
+          lane: ["flights","lodging","activities","rental","location"].includes(e.lane) ? e.lane : "activities",
+          color: isLayover ? "grey"
+            : e.lane === "flights" ? "indigo"
+            : e.lane === "lodging" ? "amber"
+            : e.lane === "rental" ? "orange"
+            : e.lane === "location" ? "violet"
+            : "emerald",
+          start: e.start, end: e.end || e.start,
+          ...(e.startTime ? { startTime: e.startTime } : {}),
+          ...(e.endTime ? { endTime: e.endTime } : {}),
+          notes: e.notes || "Parsed by Claude",
+        };
+      }).filter(e => e.start && /^\d{4}-\d{2}-\d{2}$/.test(e.start));
       if (events.length === 0) {
         status.textContent = "Claude didn't find any events in that text.";
         status.className = "paste-status error";
@@ -4910,7 +6388,6 @@ async function bootstrap() {
   }
 
   const slug = params.get("id");
-  CURRENT_VIEWER_TOKEN = params.get("v") || null;
   let tripId = params.get("trip");
 
   if (slug && !tripId) {
@@ -4930,7 +6407,7 @@ async function bootstrap() {
   let serverIsOwner = false;
   let serverLevel = null; // "owner" | "viewer" | "viewer-pricing" | "editor" | null
   if (slug) {
-    const res = await fetchTrip(slug, CURRENT_VIEWER_TOKEN);
+    const res = await fetchTrip(slug);
     if (res.ok) { serverState = res.body; serverIsOwner = !!res.isOwner; serverLevel = res.level || null; }
     if (!tripId && serverState) {
       tripId = newTripId();
@@ -4971,11 +6448,7 @@ async function bootstrap() {
   // Owner OR editor can edit. Editor is a shared-user level that grants
   // full write access (still not owner — can't re-share or change ownership).
   CAN_EDIT = serverIsOwner || serverLevel === "editor";
-  // Pricing shows for owner, editor, viewer-pricing, or anonymous ?v= viewer
-  // when the worker returned pricing fields inline.
-  CAN_SEE_PRICING = CAN_EDIT
-    || serverLevel === "viewer-pricing"
-    || (!!CURRENT_VIEWER_TOKEN && serverHasPricing);
+  CAN_SEE_PRICING = CAN_EDIT || serverLevel === "viewer-pricing";
 
   // Newest-wins merge: server wins if its modifiedAt is newer-or-equal.
   // Pricing fields, however, are *only* taken from the server when the server

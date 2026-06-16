@@ -259,7 +259,11 @@
         <div class="psub">Pick what to show and whose — it opens on a clean page in a new tab. Nothing else is visible there.</div>
         <div class="present-step-label">1 · Which credential?</div>
         <div class="cred-choices" id="present-creds"></div>
-        <div class="present-step-label">2 · Whose details?</div>
+        <div id="present-brand-step" hidden>
+          <div class="present-step-label" id="present-brand-label">2 · Which company?</div>
+          <div class="cred-choices" id="present-brand"></div>
+        </div>
+        <div class="present-step-label" id="present-names-label">2 · Whose details?</div>
         <div class="name-choices" id="present-names"><div class="present-empty-note">Choose a credential first.</div></div>
         <div class="present-actions">
           <button class="btn-cancel" id="present-cancel">Cancel</button>
@@ -682,22 +686,36 @@ function renderPeopleBar() {
 }
 
 // --- "Show to someone" presentation flow --------------------------------
-const PRESENT = { section: null, names: new Set() };
+const PRESENT = { section: null, brand: "", names: new Set() };
 
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, c =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
-// Map of personId ("" = unassigned) -> entry count for a section.
-function peopleCountsFor(section) {
+// Map of personId ("" = unassigned) -> entry count for a section, optionally
+// limited to one company/brand ("" = all).
+function peopleCountsFor(section, brand) {
   const counts = new Map();
   (WALLET[section.key] || []).forEach(r => {
     if (EDITING.has(r.id) && NEW.has(r.id)) return; // skip half-added rows
+    if (brand && section.group && (r[section.group.key] || "").trim() !== brand) return;
     const pid = r.person || "";
     counts.set(pid, (counts.get(pid) || 0) + 1);
   });
   return counts;
+}
+
+// Distinct company/brand values present in a section's entries.
+function brandsFor(section) {
+  if (!section.group) return [];
+  const seen = [];
+  (WALLET[section.key] || []).forEach(r => {
+    if (EDITING.has(r.id) && NEW.has(r.id)) return;
+    const b = (r[section.group.key] || "").trim();
+    if (b && !seen.includes(b)) seen.push(b);
+  });
+  return seen;
 }
 
 function setupPresentModal() {
@@ -709,15 +727,17 @@ function setupPresentModal() {
   });
   document.getElementById("present-show").addEventListener("click", () => {
     if (!PRESENT.section || PRESENT.names.size === 0) return;
-    presentShow(PRESENT.section, PRESENT.names);
+    presentShow(PRESENT.section, PRESENT.names, PRESENT.brand);
     closePresentModal();
   });
 }
 
 function openPresentModal() {
   PRESENT.section = null;
+  PRESENT.brand = "";
   PRESENT.names = new Set();
   renderPresentCreds();
+  renderPresentBrand();
   renderPresentNames();
   updateShowState();
   document.getElementById("present-overlay").hidden = false;
@@ -868,9 +888,52 @@ function renderPresentCreds() {
   });
   sel.addEventListener("change", () => {
     PRESENT.section = SECTIONS.find(s => s.key === sel.value) || null;
-    // Default to everyone who has an entry in this credential.
+    PRESENT.brand = ""; // reset company filter
     PRESENT.names = PRESENT.section
-      ? new Set(peopleCountsFor(PRESENT.section).keys()) : new Set();
+      ? new Set(peopleCountsFor(PRESENT.section, "").keys()) : new Set();
+    renderPresentBrand();
+    renderPresentNames();
+    updateShowState();
+  });
+  wrap.appendChild(sel);
+}
+
+// Company/brand step — only for grouped credentials (Frequent flyer, Hotels,
+// Cars). Lets you narrow to one company instead of showing all of them.
+function renderPresentBrand() {
+  const step = document.getElementById("present-brand-step");
+  const wrap = document.getElementById("present-brand");
+  const namesLabel = document.getElementById("present-names-label");
+  const brandLabel = document.getElementById("present-brand-label");
+  wrap.innerHTML = "";
+  const brands = PRESENT.section ? brandsFor(PRESENT.section) : [];
+  // Only worth a filter step when there are at least two companies to choose.
+  if (!PRESENT.section || brands.length < 2) {
+    step.hidden = true;
+    namesLabel.textContent = "2 · Whose details?";
+    return;
+  }
+  step.hidden = false;
+  brandLabel.textContent = `2 · Which ${PRESENT.section.group.label.toLowerCase()}?`;
+  namesLabel.textContent = "3 · Whose details?";
+
+  const sel = document.createElement("select");
+  sel.className = "present-select";
+  const all = document.createElement("option");
+  all.value = "";
+  all.textContent = "All companies";
+  if (!PRESENT.brand) all.selected = true;
+  sel.appendChild(all);
+  brands.forEach(b => {
+    const opt = document.createElement("option");
+    opt.value = b;
+    opt.textContent = b;
+    if (PRESENT.brand === b) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  sel.addEventListener("change", () => {
+    PRESENT.brand = sel.value;
+    PRESENT.names = new Set(peopleCountsFor(PRESENT.section, PRESENT.brand).keys());
     renderPresentNames();
     updateShowState();
   });
@@ -884,7 +947,7 @@ function renderPresentNames() {
     wrap.innerHTML = '<div class="present-empty-note">Choose a credential first.</div>';
     return;
   }
-  const counts = peopleCountsFor(PRESENT.section);
+  const counts = peopleCountsFor(PRESENT.section, PRESENT.brand);
   // People list order first, then unassigned at the end.
   const order = [...people().map(p => p.id), ""].filter(id => counts.has(id));
   order.forEach(pid => {
@@ -916,9 +979,12 @@ function updateShowState() {
 
 // Build a clean standalone HTML page for the chosen credential + names and
 // open it in a new tab. Data is written from memory — no extra network call.
-function presentShow(section, nameSet) {
+function presentShow(section, nameSet, brand) {
   const entries = (WALLET[section.key] || []).filter(r =>
-    nameSet.has(r.person || "") && !(EDITING.has(r.id) && NEW.has(r.id)));
+    nameSet.has(r.person || "")
+    && (!brand || !section.group || (r[section.group.key] || "").trim() === brand)
+    && !(EDITING.has(r.id) && NEW.has(r.id)));
+  const pageTitle = brand ? `${section.title} — ${brand}` : section.title;
 
   // Group entries by person, in people-list order then unassigned.
   const byPerson = new Map();
@@ -958,7 +1024,7 @@ function presentShow(section, nameSet) {
 <html lang="en"><head><meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <meta name="robots" content="noindex, nofollow" />
-<title>${esc(section.title)}</title>
+<title>${esc(pageTitle)}</title>
 <style>
   :root { --bg:#fff; --text:#1a1d23; --muted:#6b7280; --line:#e4e7ec; --accent:#4f6dff; --panel:#f7f8fa; }
   * { box-sizing: border-box; }
@@ -977,7 +1043,7 @@ function presentShow(section, nameSet) {
   .empty { color:var(--muted); font-style:italic; }
 </style></head>
 <body>
-  <div class="bar"><h1>${esc(section.title)}</h1><button class="close" onclick="window.close()">Close</button></div>
+  <div class="bar"><h1>${esc(pageTitle)}</h1><button class="close" onclick="window.close()">Close</button></div>
   <div class="wrap">${blocks || '<div class="empty">Nothing to show.</div>'}</div>
 </body></html>`;
 

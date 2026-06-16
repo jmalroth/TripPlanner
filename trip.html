@@ -6,6 +6,8 @@
 <meta name="robots" content="noindex, nofollow" />
 <title>Trip Timeline Builder</title>
 <link rel="stylesheet" href="styles.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script type="module" src="firebase-client.js"></script>
 <style>
   .auth-gate { position: fixed; inset: 0; background: var(--bg, #fff); display: none; align-items: center; justify-content: center; z-index: 9999; }
@@ -42,9 +44,26 @@
     </div>
   </div>
 
+  <header class="app-header" id="app-header" hidden>
+    <a class="app-header-brand" href="./" title="myitin — home">
+      <span class="app-header-brand-mark">m</span>
+      <span>myitin</span>
+    </a>
+    <div class="app-header-user">
+      <button id="app-user-btn" class="app-user-btn" type="button" aria-haspopup="true" aria-expanded="false">
+        <span class="app-user-initial" id="app-user-initial">?</span>
+        <span class="app-user-name" id="app-user-name">Signed in</span>
+        <span class="app-user-caret">▾</span>
+      </button>
+      <div class="app-user-menu" id="app-user-menu" hidden>
+        <button id="app-user-set-password" type="button">Set password</button>
+        <button id="app-user-signout" type="button">Sign out</button>
+      </div>
+    </div>
+  </header>
+
   <header class="topbar">
     <div class="trip-meta">
-      <a href="./" class="back-link" title="All trips">← Trips</a>
       <button id="trip-display" type="button" class="trip-display" title="Click to edit name and dates">
         <span id="trip-display-name">Untitled trip</span>
         <span id="trip-display-dates" class="trip-display-dates"></span>
@@ -58,8 +77,16 @@
       <span id="trip-length" class="trip-length"></span>
     </div>
     <div class="actions">
-      <button id="share-btn" type="button" class="ghost" title="Copy a link to share this trip read-only">Share</button>
       <span id="sync-indicator" class="sync-indicator"></span>
+      <div class="trip-menu-wrap print-menu-wrap">
+        <button id="print-btn" type="button" class="ghost" title="Print your itinerary, or save it as a PDF" aria-haspopup="true" aria-expanded="false">Print ▾</button>
+        <div id="print-menu" class="app-user-menu" hidden>
+          <button id="print-list" type="button">Chronological list</button>
+          <button id="print-bytype" type="button">By type</button>
+          <button id="print-timeline" type="button">Visual timeline</button>
+        </div>
+      </div>
+      <button id="share-btn" type="button" class="ghost" title="Copy a link to share this trip read-only">Share</button>
     </div>
   </header>
 
@@ -69,6 +96,19 @@
     <button class="tab-btn" data-tab="pricing">Pricing</button>
     <button class="tab-btn" data-tab="options">Itinerary options</button>
     <button class="tab-btn" data-tab="compare">Compare hotels</button>
+    <button class="tab-btn" data-tab="rental">Compare car rentals</button>
+    <div class="trip-menu-wrap tabs-menu-wrap">
+      <button id="trip-menu-btn" type="button" class="ghost" title="More options" aria-haspopup="true" aria-expanded="false">⋯</button>
+      <div id="trip-menu" class="trip-menu" hidden>
+        <div class="trip-menu-section">
+          <div class="trip-menu-heading">Extra tabs</div>
+          <label><input type="checkbox" id="enable-tab-todo" /> To do</label>
+          <label><input type="checkbox" id="enable-tab-options" /> Itinerary options</label>
+          <label><input type="checkbox" id="enable-tab-compare" /> Compare hotels</label>
+          <label><input type="checkbox" id="enable-tab-rental" /> Compare car rentals</label>
+        </div>
+      </div>
+    </div>
   </nav>
 
   <div class="tab-panel" id="tab-main">
@@ -76,7 +116,6 @@
       <section class="panel">
         <div class="panel-head">
           <h2>Whole trip</h2>
-          <span class="hint">Overview — entire trip on one row</span>
           <div class="panel-head-actions">
             <label class="toggle">
               <input id="tz-aware" type="checkbox" />
@@ -88,18 +127,33 @@
         <div id="overview" class="timeline overview"></div>
       </section>
 
-      <section class="panel">
+      <section class="panel" id="map-panel" hidden>
+        <div class="panel-head">
+          <h2>Flight map</h2>
+        </div>
+        <div id="flight-map" class="flight-map"></div>
+        <div id="flight-map-legend" class="flight-map-legend"></div>
+      </section>
+
+      <section class="panel" id="breakdown-panel">
         <div class="panel-head">
           <h2>Breakdown</h2>
-          <div class="segment-controls">
-            <label>Group by
-              <select id="segment-size">
-                <option value="auto">Auto</option>
-                <option value="3">3 days</option>
-                <option value="7">Week</option>
-                <option value="14">2 weeks</option>
-              </select>
-            </label>
+          <div class="panel-head-actions">
+            <div class="view-toggle" id="breakdown-view-toggle">
+              <button type="button" data-bview="timeline">Timeline</button>
+              <button type="button" data-bview="outline">Day by day</button>
+              <button type="button" data-bview="bytype">By type</button>
+            </div>
+            <div class="segment-controls" id="segment-controls">
+              <label>Group by
+                <select id="segment-size">
+                  <option value="auto">Auto</option>
+                  <option value="3">3 days</option>
+                  <option value="7">Week</option>
+                  <option value="14">2 weeks</option>
+                </select>
+              </label>
+            </div>
           </div>
         </div>
         <div id="breakdown" class="breakdown"></div>
@@ -108,12 +162,11 @@
       <section class="panel">
         <div class="panel-head">
           <h2>Add to itinerary</h2>
-          <span class="hint">Paste a flight, or type a command like "add hotel on jul 7 for znz hotel"</span>
         </div>
         <details class="paste-block">
           <summary>Paste flight data or type a command</summary>
           <div class="paste-content">
-            <textarea id="paste-input-main" rows="6" placeholder="Paste a flight (Google Flights / Kayak / etc.) — or type a command:&#10;  add hotel on jul 7 for znz hotel&#10;  add activity on july 4 hiking&#10;  add lodging on jul 7 to jul 8 at riu palace"></textarea>
+            <textarea id="paste-input-main" rows="6"></textarea>
             <div class="paste-actions">
               <button id="paste-parse-main" type="button">Parse &amp; add</button>
               <button id="paste-smart-main" type="button" class="smart" title="Use AI to add new events from this text">✨ Smart parse</button>
@@ -129,7 +182,78 @@
 
   <div class="tab-panel" id="tab-pricing" hidden>
     <main>
-      <details class="panel pricing-split-section" id="pricing-split-section">
+      <!-- Add line item: always visible, tinted to stand out. -->
+      <section class="panel pricing-add-panel" id="pricing-builder-details">
+        <div class="panel-head">
+          <h2 id="pricing-add-heading">Add line item</h2>
+        </div>
+        <div class="pricing-builder">
+          <details class="pricing-overrides pricing-others-only" id="pricing-bundle-details">
+            <summary>Bundle itinerary items (optional)</summary>
+            <div class="pricing-pills-head">
+              <span>Click items to bundle into this line item:</span>
+              <span id="pricing-selection-summary" class="pricing-selection-summary"></span>
+            </div>
+            <div id="pricing-pills" class="pricing-pills"></div>
+          </details>
+          <div class="pricing-add-form">
+            <div class="pricing-label-row">
+              <input id="pricing-label" type="text" placeholder="Optional label (e.g. 'Round trip flights')" />
+              <label class="pricing-lane-select">Group as
+                <select id="pricing-lane">
+                  <option value="">Auto</option>
+                  <option value="lodging">Lodging</option>
+                  <option value="flights">Flights</option>
+                  <option value="rental">Transportation</option>
+                  <option value="activities">Activities</option>
+                  <option value="location">Where</option>
+                </select>
+              </label>
+            </div>
+            <div class="pricing-add-row">
+              <label>Total $<input id="pricing-total" type="text" placeholder="e.g. 1000 or 25%*800" /></label>
+              <span id="pricing-default-breakdown" class="pricing-line-total"></span>
+            </div>
+            <details class="pricing-overrides pricing-others-only">
+              <summary>Advanced — override split &amp; who paid</summary>
+              <div class="pricing-adv-section">
+                <div class="pricing-adv-label">Override each group's share</div>
+                <div id="pricing-overrides-hint" class="pricing-overrides-hint"></div>
+                <div id="pricing-overrides-rows" class="pricing-overrides-rows"></div>
+              </div>
+              <div class="pricing-adv-section">
+                <div class="pricing-adv-label">Who paid? (for settle-up)</div>
+                <div class="pricing-overrides-hint">Leave blank if you paid. Tick "full" or "share", or type an amount.</div>
+                <div id="pricing-paid-rows" class="pricing-paid-grid"></div>
+              </div>
+            </details>
+            <div class="pricing-add-actions">
+              <button id="pricing-add-btn" type="button">+ Add line item</button>
+              <button id="pricing-cancel-edit" type="button" class="ghost" hidden>Cancel edit</button>
+              <button id="pricing-clear-sel" type="button" class="ghost pricing-others-only">Clear selection</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Pricing results -->
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Pricing</h2>
+        </div>
+        <div id="pricing-settle" class="pricing-settle"></div>
+        <div id="pricing-summary" class="pricing-summary"></div>
+        <div id="pricing-line-items" class="pricing-line-items"></div>
+      </section>
+
+      <!-- One-time per-trip setup, at the bottom. -->
+      <section class="panel pricing-has-others-panel">
+        <label class="checkbox-row">
+          <input type="checkbox" id="pricing-has-others-cb" />
+          <span>Are others traveling with you?</span>
+        </label>
+      </section>
+      <details class="panel pricing-split-section pricing-others-only" id="pricing-split-section">
         <summary class="panel-head">
           <h2>Default split</h2>
         </summary>
@@ -141,38 +265,6 @@
           </div>
         </div>
       </details>
-      <section class="panel">
-        <div class="panel-head">
-          <h2>Pricing</h2>
-          <span class="hint">Bundle items into line items with a single price</span>
-        </div>
-        <div class="pricing-builder">
-          <div class="pricing-pills-head">
-            <span>Click items to bundle, then add a line item:</span>
-            <span id="pricing-selection-summary" class="pricing-selection-summary"></span>
-          </div>
-          <div id="pricing-pills" class="pricing-pills"></div>
-          <div class="pricing-add-form">
-            <input id="pricing-label" type="text" placeholder="Optional label (e.g. 'Round trip flights')" />
-            <div class="pricing-add-row">
-              <label>Total $<input id="pricing-total" type="text" placeholder="e.g. 1000 or 25%*800" /></label>
-              <span id="pricing-default-breakdown" class="pricing-line-total"></span>
-            </div>
-            <details class="pricing-overrides">
-              <summary>Override per group (optional)</summary>
-              <div id="pricing-overrides-hint" class="pricing-overrides-hint"></div>
-              <div id="pricing-overrides-rows" class="pricing-overrides-rows"></div>
-            </details>
-            <div class="pricing-add-actions">
-              <button id="pricing-add-btn" type="button">+ Add line item</button>
-              <button id="pricing-cancel-edit" type="button" class="ghost" hidden>Cancel edit</button>
-              <button id="pricing-clear-sel" type="button" class="ghost">Clear selection</button>
-            </div>
-          </div>
-        </div>
-        <div id="pricing-summary" class="pricing-summary"></div>
-        <div id="pricing-line-items" class="pricing-line-items"></div>
-      </section>
     </main>
   </div>
 
@@ -210,7 +302,7 @@
         <details class="paste-block">
           <summary>Paste flight data</summary>
           <div class="paste-content">
-            <textarea id="paste-input" rows="8" placeholder="Paste a flight (Google Flights / Kayak / etc.) — or type a command:&#10;  add hotel on jul 7 for znz hotel&#10;  add activity on july 4 hiking&#10;  add lodging on jul 7 to jul 8 at riu palace"></textarea>
+            <textarea id="paste-input" rows="8"></textarea>
             <div class="paste-actions">
               <label>Add to
                 <select id="paste-target"></select>
@@ -220,22 +312,6 @@
               <button id="paste-clear" type="button" class="ghost">Clear</button>
             </div>
             <div id="paste-status" class="paste-status"></div>
-            <details class="paste-help">
-              <summary>+ what can I paste?</summary>
-              <div class="paste-help-content">
-                <p><strong>Flight blocks</strong> — paste Google Flights / Kayak output. Multi-leg trips and layovers are handled. Both single-line ("Kenya AirwaysEconomyBoeing 737KQ 427") and multi-line ("Air Tanzania" / "Economy" / "ATR 72PW 721") formats work, plus <code>+1</code> / <code>+2</code> day-offset times.</p>
-                <p><strong>Plain-language commands</strong> — type instead of paste:</p>
-                <ul>
-                  <li><code>add hotel on jul 7 for znz hotel</code> — 1-day lodging titled "znz hotel"</li>
-                  <li><code>add lodging on jul 7 to jul 8 at riu palace</code> — 2-day lodging</li>
-                  <li><code>add activity on july 4 hiking</code></li>
-                  <li><code>add location on jul 5 cape town</code></li>
-                  <li><code>add flight on jul 6 jro to nbo</code> — generic flights-lane placeholder (use a real Google Flights paste if you want times &amp; TZ to flow through)</li>
-                </ul>
-                <p><strong>Date formats</strong>: <code>july 7</code>, <code>jul 7</code>, <code>2026-07-07</code>, <code>7/7</code>, <code>7/7/2026</code>. Year defaults to the trip's start year if omitted.</p>
-                <p><strong>Lane keywords</strong>: <code>hotel</code> / <code>hotels</code> / <code>lodging</code>, <code>flight</code> / <code>flights</code>, <code>activity</code> / <code>activities</code>, <code>location</code> / <code>where</code>. The word <code>placeholder</code> is tolerated, and a leading <code>for</code> or <code>at</code> before the title is stripped.</p>
-              </div>
-            </details>
           </div>
         </details>
         <div id="options-list"></div>
@@ -268,9 +344,27 @@
     </main>
   </div>
 
+  <div class="tab-panel" id="tab-rental" hidden>
+    <main>
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Compare rental cars</h2>
+        </div>
+        <div class="rental-actions">
+          <button id="rental-add-btn" type="button">+ Add rental</button>
+        </div>
+        <div id="rental-table" class="compare-table-wrap"></div>
+      </section>
+    </main>
+  </div>
+
   <dialog id="event-dialog">
     <form id="event-form" method="dialog">
-      <h3 id="event-dialog-title">Add event</h3>
+      <div class="event-dialog-head">
+        <h3 id="event-dialog-title">Add event</h3>
+        <button type="button" id="event-merge-btn" class="ghost" hidden>Merge</button>
+      </div>
+      <div id="event-merge-panel" class="event-merge-panel" hidden></div>
       <label>Title<input name="title" type="text" required /></label>
       <div class="row-2">
         <label>Lane
@@ -278,7 +372,7 @@
             <option value="location">Where</option>
             <option value="flights">Flights</option>
             <option value="lodging">Lodging</option>
-            <option value="rental">Rental car</option>
+            <option value="rental">Transportation</option>
             <option value="activities" selected>Activities</option>
           </select>
         </label>
@@ -299,6 +393,7 @@
         <input type="checkbox" name="tentative" id="event-tentative" />
         <span>Tentative — still need to book</span>
       </label>
+      <label>Confirmation #<input name="confirmation" type="text" placeholder="Booking / confirmation code (flights & hotels)" autocomplete="off" /></label>
       <label>Notes<textarea name="notes" rows="2"></textarea></label>
       <input type="hidden" name="id" />
       <input type="hidden" name="optionId" />
@@ -310,6 +405,9 @@
       </div>
     </form>
   </dialog>
+
+  <!-- Print-only chronological itinerary; populated on print, hidden on screen. -->
+  <div id="print-root" class="print-root" aria-hidden="true"></div>
 
   <script>
   // Auth gate. Anonymous viewers reaching this page via a shared ?v=<token>
@@ -331,11 +429,55 @@
     }
 
     whenReady(() => {
-      window.fb.onAuth((user) => {
+      const header = document.getElementById("app-header");
+      const userName = document.getElementById("app-user-name");
+      const userInitial = document.getElementById("app-user-initial");
+      const menuBtn = document.getElementById("app-user-btn");
+      const menu = document.getElementById("app-user-menu");
+      const setPwBtn = document.getElementById("app-user-set-password");
+      menuBtn?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const open = menu.hidden;
+        menu.hidden = !open;
+        menuBtn.setAttribute("aria-expanded", String(open));
+      });
+      document.addEventListener("click", (e) => {
+        if (!menu || menu.hidden) return;
+        if (e.target.closest("#app-user-menu") || e.target.closest("#app-user-btn")) return;
+        menu.hidden = true;
+        menuBtn?.setAttribute("aria-expanded", "false");
+      });
+      document.getElementById("app-user-signout")?.addEventListener("click", async () => {
+        try { await window.fb.signOut(); } catch (_) {}
+      });
+      setPwBtn?.addEventListener("click", async () => {
+        const pw = prompt("Set a new password (min 6 characters).");
+        if (pw == null) return;
+        try {
+          await window.fb.setPassword(pw);
+          alert("Password updated.");
+          setPwBtn.hidden = true;
+        } catch (e) { alert(e.message || "Couldn't set password."); }
+      });
+
+      window.fb.onAuth(async (user) => {
         if (user || hasViewerToken || hasPublicToken) {
           gate.classList.remove("show");
         } else {
           gate.classList.add("show");
+        }
+        if (user && header) {
+          header.hidden = false;
+          const label = user.displayName || user.email || "Signed in";
+          userName.textContent = label;
+          userInitial.textContent = label[0] || "?";
+          setPwBtn.hidden = true;
+          try {
+            const has = await window.fb.hasPassword();
+            setPwBtn.hidden = has;
+          } catch (_) {}
+        } else if (header) {
+          header.hidden = true;
         }
       });
       document.getElementById("auth-google").addEventListener("click", async () => {
@@ -366,7 +508,6 @@
     });
   })();
   </script>
-  <script src="registry-sync.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

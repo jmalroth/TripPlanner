@@ -50,3 +50,6 @@ desktop.ini
 # Wrangler local cache
 worker/.wrangler/
 .firebase/
+
+# Cloudflare Wrangler cache (migrated off Cloudflare)
+.wrangler/

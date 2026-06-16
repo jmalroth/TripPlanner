@@ -10,16 +10,32 @@
       "**/.*",
       "**/node_modules/**",
       "worker/**",
+      "functions/**",
       "state-export.json",
       "*.md"
     ],
     "cleanUrls": true,
     "rewrites": [
       { "source": "/trip/**", "destination": "/trip.html" }
+    ],
+    "headers": [
+      {
+        "source": "**/*.@(js|css|html)",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-cache, max-age=0, must-revalidate" }
+        ]
+      }
     ]
   },
   "firestore": {
     "rules": "firestore.rules",
     "indexes": "firestore.indexes.json"
-  }
+  },
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "ignore": ["node_modules", ".git", "firebase-debug.log", "firebase-debug.*.log", "*.local"]
+    }
+  ]
 }
